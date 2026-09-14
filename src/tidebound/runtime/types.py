@@ -30,6 +30,7 @@ class RunRecord(BaseModel):
     status: Literal["running", "completed", "stopped", "failed", "interrupted"] = "running"
     user_content: str
     messages: list[Message] = Field(default_factory=list)
+    preview: str = Field(default="", exclude=True)
     prompt_name: str = ""
     error_code: str | None = None
     error: str | None = None

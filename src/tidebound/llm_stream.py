@@ -5,6 +5,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from src.tidebound.debug import TerminalDebug
+from src.tidebound.runtime.preview import publish_preview
 from src.tidebound.runtime.types import Message, ModelReply, ToolCall
 
 
@@ -97,6 +98,10 @@ async def read_stream(response: httpx.Response, debug: TerminalDebug) -> ModelRe
         if delta.content:
             message.content += delta.content
             debug.write("回复", delta.content)
+        if delta.tool_calls:
+            publish_preview("")
+        elif delta.content and not calls:
+            publish_preview(message.content)
         for part in delta.tool_calls or []:
             if part.type not in (None, "function"):
                 raise ValueError("unexpected tool type")

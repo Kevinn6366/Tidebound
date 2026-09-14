@@ -172,3 +172,25 @@ test('普通用户界面不显示 console 且后端拒绝进入', async ({ page 
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
   expect((await page.request.get('/api/chat/session')).status()).toBe(401);
 });
+
+test('真实流式正文在执行结束前可见，刷新恢复且停止撤掉临时文字', async ({ page }) => {
+  await page.goto('/app/');
+  await page.getByRole('button', { name: 'START', exact: true }).click();
+  const input = page.getByPlaceholder(/输入/).first();
+  await expect(input).toBeEnabled();
+  await input.fill('流式测试');
+  await input.press('Enter');
+  const reply = page.getByLabel('角色回复', { exact: true });
+  await expect(reply).toContainText('协议');
+  const running = await (await page.request.get('/api/chat/session')).json();
+  expect(running.active_run.status).toBe('running');
+  expect(running.messages).toEqual([]);
+  const firstText = await reply.textContent();
+  await expect.poll(async () => (await reply.textContent())?.length ?? 0).toBeGreaterThan(firstText?.length ?? 0);
+  await page.reload();
+  await expect(page.getByLabel('角色回复', { exact: true })).toContainText('协议');
+  await page.getByRole('button', { name: '停止回复', exact: true }).click();
+  await expect.poll(async () => (await (await page.request.get('/api/chat/session')).json()).active_run).toBeNull();
+  await expect(page.getByLabel('角色回复', { exact: true })).toHaveCount(0);
+  expect((await (await page.request.get('/api/chat/session')).json()).messages).toEqual([]);
+});

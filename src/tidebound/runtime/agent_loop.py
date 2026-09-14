@@ -8,6 +8,7 @@ from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ModelClient
 from src.tidebound.prompting import load_tool_injections
+from src.tidebound.runtime.preview import publish_preview
 from src.tidebound.runtime.types import Message
 from src.tidebound.storage.model_requests import request_injection, request_step
 from src.tidebound.tools.registry import ToolMap, invoke_tool, tool_definitions
@@ -39,6 +40,7 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
         debug.write("模型调用", f"第 {step + 1}/{settings.max_model_calls} 次\n")
         if stop.is_set():
             raise AgentError("run_stopped", "本次回复已停止。")
+        publish_preview("")
         request_system = "\n\n".join(part for part in (system, injection) if part)
         current_injection = injection
         injection = ""  # 上批工具规则仅用于紧接着的一次请求，不进入消息历史。
@@ -69,6 +71,7 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
             if reply.finish_reason != "stop" or not message.content.strip():
                 raise AgentError("empty_model_response", "模型没有返回完整回复。", 502)
             return current
+        publish_preview("")
         if len(message.tool_calls) > 8 or len({c.id for c in message.tool_calls}) != len(message.tool_calls):
             raise AgentError("invalid_tool_calls", "模型工具调用数量或标识非法。", 502)
         injection_purposes: list[str] = []

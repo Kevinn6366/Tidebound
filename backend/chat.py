@@ -42,6 +42,8 @@ class RunView(BaseModel):
     run_id: str
     status: str
     tools: list[ToolResultView] = Field(default_factory=list)
+    preview: str = ""
+    user_content: str = ""
     reply: str | None = None
     error_code: str | None = None
     error: str | None = None
@@ -83,6 +85,7 @@ def run_view(record: RunRecord) -> RunView:
         elif message.role == "tool" and message.tool_call_id in pending:
             pending[message.tool_call_id].result = message.content
     return RunView(run_id=record.run_id, status=record.status, reply=reply, tools=tool_views,
+                   preview=record.preview if record.status == "running" else "", user_content=record.user_content,
                    error_code=record.error_code, error=record.error)
 
 

@@ -1,4 +1,5 @@
 import { useAgentChat } from '../hooks/useAgentChat';
+import { useStreamingText } from '../hooks/useStreamingText';
 import { frontendFetch as fetch } from '../services/frontendFetch';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
@@ -2047,7 +2048,9 @@ export default function AppCore({ router }) {
   const currentBgItem = bgList.find(b => b.id === settings.currentBgId);
   const activeBgUrl = appMode === 'title' ? (localTitleBgImage || '/app/bg.png') : (currentBgItem ? (currentBgItem.url || currentBgItem.dataUrl || '/app/bg.png') : '/app/bg.png');
   const activeSession = useMemo(() => ({ id: 'atri', title: '与亚托莉的对话', messages: agentChat.session.messages }), [agentChat.session.messages]);
-  const latestMessage = activeSession?.messages?.[activeSession.messages.length - 1];
+  const activeRun = agentChat.session.active_run;
+  const latestMessage = activeRun ? { id: `${activeRun.run_id}:assistant`, role: 'assistant',
+    content: activeRun.preview, isStreaming: true } : activeSession?.messages?.[activeSession.messages.length - 1];
 
   const triggerShortcut = (id, defaultAction, e) => {
       if (typeof window.triggerShortcut === 'function') {
@@ -2130,6 +2133,7 @@ export default function AppCore({ router }) {
 
   const pages = latestMessage ? getPages(latestMessage.content) : [""];
   const currentDisplay = pages[vnPage] || pages[pages.length - 1] || "";
+  const streamedDisplay = useStreamingText(currentDisplay, `${latestMessage?.id}:${vnPage}`, Boolean(latestMessage?.isStreaming));
   const hasNextPage = vnPage < pages.length - 1;
 
   const handleDialogClick = () => { if (hasNextPage) setVnPage(prev => prev + 1); };
@@ -2143,7 +2147,7 @@ export default function AppCore({ router }) {
 
  const handleSkip = useCallback((e) => { e.stopPropagation(); if (pages.length > 0) { setVnPage(pages.length - 1); } }, [pages.length]);
 
-  useEffect(() => { if (vnTextContainerRef.current) vnTextContainerRef.current.scrollTop = vnTextContainerRef.current.scrollHeight; }, [currentDisplay]);
+  useEffect(() => { if (vnTextContainerRef.current) vnTextContainerRef.current.scrollTop = vnTextContainerRef.current.scrollHeight; }, [streamedDisplay]);
 
   // ✨ 核心修复：在打字机流式输出时，强制翻页跟随，解决长文本被截断显示不全的问题
   useEffect(() => {
@@ -3147,7 +3151,7 @@ export default function AppCore({ router }) {
                       </span>
                   ) : (latestMessage 
                     ? <span className={`${latestMessage.isError ? 'text-red-400' : ''}`}>
-                        <div className="whitespace-pre-wrap">{currentDisplay}</div>
+                        <div className="whitespace-pre-wrap" aria-label="角色回复">{streamedDisplay}</div>
                         {latestMessage.isStreaming && !hasNextPage && <span className={`inline-block ml-1 bg-white/70 animate-pulse align-middle rounded-sm ${settings.enableMobileUI ? 'w-2 md:w-2.5 h-4 md:h-6' : 'w-2.5 h-6'}`}></span>}
                         {hasNextPage && <span className={`inline-block animate-bounce text-indigo-300 pointer-events-none select-none ${settings.enableMobileUI ? 'ml-2 md:ml-3' : 'ml-3'}`}><ChevronDown size={settings.enableMobileUI ? 20 : 24} className={settings.enableMobileUI ? "md:w-6 md:h-6" : ""} /></span>}
                       </span>

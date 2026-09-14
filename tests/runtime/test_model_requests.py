@@ -15,12 +15,12 @@ from src.tidebound.storage.model_requests import ModelRequestStore
 
 @pytest.mark.parametrize("debug", [False, True])
 def test_snapshots_match_http_body(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, debug: bool) -> None:
-    """非流式与流式请求均保留精确正文，包括调用后的一次性注入。
+    """终端 debug 开关均保留精确的流式请求正文，包括调用后的一次性注入。
 
     Args:
         monkeypatch: 替换模型 HTTP 网络。
         tmp_path: 隔离请求与执行记录。
-        debug: 是否使用模型 SSE 流式协议。
+        debug: 是否同时输出终端调试日志。
     """
     bodies: list[dict[str, object]] = []
     actual = httpx.AsyncClient
@@ -42,7 +42,7 @@ def test_snapshots_match_http_body(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
                 {"id": "call-time", "type": "function", "function": {"name": "get_current_time", "arguments": "{}"}},
             ]}
             finish = "tool_calls"
-        if debug:
+        if bodies[-1]["stream"]:
             if "tool_calls" in message:
                 message["tool_calls"][0]["index"] = 0
             chunk = {"choices": [{"delta": message, "finish_reason": finish}]}

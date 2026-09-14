@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { loadChatSession, readChatRun, stopChatRun, submitChatMessage, type ChatMessageInput, type SessionView } from '../services/chatClient';
+import { loadChatSession, readChatRun, streamChatRun, stopChatRun, submitChatMessage, type ChatMessageInput, type SessionView } from '../services/chatClient';
 
 const EMPTY: SessionView = { character: 'atri', character_name: '亚托莉', messages: [], active_run: null, tool_runs: [] };
 
@@ -39,6 +39,40 @@ export function useAgentChat(): {
     return () => { window.clearInterval(timer); window.removeEventListener('focus', sync); invalidate(); };
   }, [refresh]);
 
+  const activeRunId = session.active_run?.run_id;
+  useEffect(() => {
+    if (!activeRunId) return;
+    const controller = new AbortController();
+    /** 订阅当前执行，断线只恢复订阅；状态快照不会重复追加文字。 */
+    async function follow(): Promise<void> {
+      while (!controller.signal.aborted) {
+        try {
+          await streamChatRun(activeRunId!, controller.signal, run => {
+            if (controller.signal.aborted) return;
+            requestSequence.current++;
+            setSession(previous => {
+              if (previous.active_run?.run_id !== run.run_id) return previous;
+              if (run.status === 'running') return { ...previous, active_run: run };
+              const messages = run.status === 'completed' ? [
+                ...previous.messages.filter(message => !message.id.startsWith(`${run.run_id}:`)),
+                { id: `${run.run_id}:user`, role: 'user' as const, content: run.user_content },
+                { id: `${run.run_id}:assistant`, role: 'assistant' as const, content: run.reply! },
+              ] : previous.messages;
+              return { ...previous, messages, active_run: null };
+            });
+          });
+          return;
+        } catch (cause) {
+          if (controller.signal.aborted) return;
+          setError(cause instanceof Error ? cause.message : '流式连接已中断');
+          await new Promise(resolve => window.setTimeout(resolve, 500));
+        }
+      }
+    }
+    void follow();
+    return () => controller.abort();
+  }, [activeRunId]);
+
   const send = useCallback(async (input: Omit<ChatMessageInput, 'run_id'>): Promise<void> => {
     if (sending.current || session.active_run) throw new Error('当前回复尚未结束');
     sending.current = true;
@@ -46,6 +80,7 @@ export function useAgentChat(): {
     try {
       const run = await submitChatMessage({ ...input, run_id: crypto.randomUUID() });
       runId.current = run.run_id;
+      if (run.status === 'running') setSession(previous => ({ ...previous, active_run: run }));
       let status = run;
       while (status.status === 'running') {
         await new Promise(resolve => window.setTimeout(resolve, 350));

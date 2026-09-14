@@ -112,6 +112,7 @@ def test_chat_and_settings_follow_account_across_browsers(tmp_path: Path) -> Non
     assert same.get('/api/chat/session').json()['messages'][0]['content'] == 'private'
     assert other.get('/api/chat/session').json()['messages'] == []
     assert other.get(f'/api/chat/runs/{run_id}').status_code == 404
+    assert other.get(f'/api/chat/runs/{run_id}/events').status_code == 404
     assert other.post(f'/api/chat/runs/{run_id}/stop').status_code == 404
     path = '/api/userdata/uid-00000001/core/settings'
     assert admin.put(path, json={'value': 1}).status_code == 200

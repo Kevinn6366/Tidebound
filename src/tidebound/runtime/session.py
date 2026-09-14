@@ -12,6 +12,7 @@ from src.tidebound.errors import AgentError
 from src.tidebound.llm import ChatCompletionsClient, ModelClient
 from src.tidebound.prompting import load_character_bundle
 from src.tidebound.runtime.agent_loop import agent_loop
+from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.types import Message, RunRecord
 from src.tidebound.storage.model_requests import request_run
 from src.tidebound.storage.runs import RunStore
@@ -59,7 +60,8 @@ class ChatSession:
                 record.error_code = "run_interrupted"
                 record.error = "服务中断了本次回复，本轮未提交。"
                 self.store.save(owner, record)
-        return records
+        return [self.active[owner].record if owner in self.active and item.run_id == self.active[owner].record.run_id
+                else item for item in records]
 
     def get(self, owner: str, run_id: str) -> RunRecord:
         """查找当前范围的执行。
@@ -74,6 +76,9 @@ class ChatSession:
         Raises:
             AgentError: 执行不存在。
         """
+        active = self.active.get(owner)
+        if active is not None and active.record.run_id == run_id:
+            return active.record
         record = next((item for item in self.records(owner) if item.run_id == run_id), None)
         if record is None:
             raise AgentError("run_not_found", "执行不存在。", 404)
@@ -127,6 +132,16 @@ class ChatSession:
             history: 开始时的有效历史。
             stop: 设置后不能提交成功结果的停止信号。
         """
+        def update_preview(content: str) -> None:
+            """更新未提交正文，停止后忽略迟到分片。
+
+            Args:
+                content: 当前模型调用累计返回的正文。
+            """
+            if not stop.is_set() and record.status == "running":
+                record.preview = content
+
+        preview_token = preview_sink.set(update_preview)
         context_token = request_run.set((owner, record.run_id))
         record.messages = [Message(role="user", content=record.user_content)]
         try:
@@ -146,7 +161,9 @@ class ChatSession:
             logger.error("Agent execution failed: %s", type(error).__name__)
             record.status, record.error_code, record.error = "failed", "internal_error", "执行失败，本轮未提交。"
         finally:
+            preview_sink.reset(preview_token)
             request_run.reset(context_token)
+            record.preview = ""
             TerminalDebug(self.settings.debug, record.run_id[:8]).write("执行状态", f"{record.status}: {record.error_code or 'ok'}\n")
             try:
                 # 检查与原子写之间无 await，停止不能插入成功提交中间。

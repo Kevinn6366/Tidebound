@@ -10,6 +10,7 @@ from src.tidebound.config import AgentSettings
 from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm_stream import read_stream
+from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.types import Message, ModelReply, ToolCall
 from src.tidebound.storage.model_requests import ModelRequestStore
 
@@ -73,8 +74,9 @@ class ChatCompletionsClient:
             headers["Authorization"] = f"Bearer {self.settings.api_key.get_secret_value()}"
         debug = TerminalDebug(self.settings.debug, f"LLM {uuid4().hex[:8]}")
         debug.write("请求", f"model={self.settings.model}, messages={len(messages)}, tools={len(tools)}\n")
+        stream = self.settings.debug or preview_sink.get() is not None
         request = {"model": self.settings.model, "messages": wire_messages(system, messages),
-                   "tools": tools, "tool_choice": "auto", "stream": self.settings.debug,
+                   "tools": tools, "tool_choice": "auto", "stream": stream,
                    "max_tokens": self.settings.max_output_tokens}
         if self.settings.reasoning_effort is not None:
             request["reasoning_effort"] = self.settings.reasoning_effort
@@ -84,7 +86,7 @@ class ChatCompletionsClient:
         try:
             async with httpx.AsyncClient(timeout=self.settings.timeout_seconds, trust_env=False) as client:
                 url = self.settings.base_url.rstrip("/") + "/chat/completions"
-                if self.settings.debug:
+                if stream:
                     async with client.stream("POST", url, headers=headers, json=request) as response:
                         response.raise_for_status()
                         debug.write("连接", "HTTP 200，开始读取模型流\n")

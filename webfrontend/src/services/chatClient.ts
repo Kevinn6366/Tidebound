@@ -9,6 +9,8 @@ export interface RunView {
   run_id: string;
   status: 'running' | 'completed' | 'stopped' | 'failed' | 'interrupted';
   tools: { call_id: string; name: string; arguments: string; result: string | null }[];
+  preview: string;
+  user_content: string;
   reply: string | null;
   error: string | null;
 }
@@ -54,6 +56,8 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
 function parseRun(data: unknown): RunView {
   if (typeof data !== 'object' || data === null || !('run_id' in data) || typeof data.run_id !== 'string'
     || !('status' in data) || !['running', 'completed', 'stopped', 'failed', 'interrupted'].includes(String(data.status))
+    || !('preview' in data) || typeof data.preview !== 'string'
+    || !('user_content' in data) || typeof data.user_content !== 'string'
     || !('reply' in data) || (data.reply !== null && typeof data.reply !== 'string')
     || !('error' in data) || (data.error !== null && typeof data.error !== 'string')) {
     throw new Error('执行响应格式非法');
@@ -123,4 +127,45 @@ export async function readChatRun(id: string): Promise<RunView> {
  */
 export async function stopChatRun(id: string): Promise<RunView> {
   return parseRun(await request(`/api/chat/runs/${encodeURIComponent(id)}/stop`, { method: 'POST' }));
+}
+
+
+/**
+ * 订阅模型生成中的正文快照，连接中断由调用方重连，不能隐式停止 Run。
+ * @param id - 当前账号的执行 UUID。
+ * @param signal - 页面切换时取消订阅的信号。
+ * @param onUpdate - 接收最新视图，用替换方式显示正文。
+ * @returns 收到终态后结束。
+ * @throws 网络、协议错误或未收到终态就断流。
+ */
+export async function streamChatRun(id: string, signal: AbortSignal, onUpdate: (run: RunView) => void): Promise<void> {
+  const headers = new Headers({ Accept: 'text/event-stream' });
+  const user = getSessionUser();
+  if (user) headers.set('X-Tidebound-Uid', user.uid);
+  const response = await fetch(`/api/chat/runs/${encodeURIComponent(id)}/events`, { headers, signal, credentials: 'same-origin' });
+  if (!response.ok || !response.body) throw new Error(`流式连接失败（${response.status}）`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error('流式连接已中断，正在重连');
+      buffer += decoder.decode(value, { stream: true });
+      let boundary: number;
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        const event = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const payload = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+        if (!payload) continue;
+        const run = parseRun(JSON.parse(payload));
+        if (run.run_id !== id) throw new Error('流式执行标识不匹配');
+        onUpdate(run);
+        if (run.status !== 'running') return;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined); // 已断开的订阅无需再次取消。
+    reader.releaseLock();
+  }
 }
