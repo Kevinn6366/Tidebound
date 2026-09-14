@@ -2,10 +2,10 @@
 
 import json
 
-from src.config import AgentSettings
-from src.errors import AgentError
-from src.llm import wire_messages
-from src.runtime.types import Message
+from src.tidebound.config import AgentSettings
+from src.tidebound.errors import AgentError
+from src.tidebound.llm import wire_messages
+from src.tidebound.runtime.types import Message
 
 
 def select_messages(system: str, history: list[list[Message]], current: list[Message],

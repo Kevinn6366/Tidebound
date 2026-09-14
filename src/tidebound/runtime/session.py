@@ -6,15 +6,15 @@ from datetime import UTC, datetime
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from src.config import AgentSettings
-from src.debug import TerminalDebug
-from src.errors import AgentError
-from src.llm import ChatCompletionsClient, ModelClient
-from src.prompting import load_character_bundle
-from src.runtime.agent_loop import agent_loop
-from src.runtime.types import Message, RunRecord
-from src.storage.runs import RunStore
-from src.tools.registry import create_tools
+from src.tidebound.config import AgentSettings
+from src.tidebound.debug import TerminalDebug
+from src.tidebound.errors import AgentError
+from src.tidebound.llm import ChatCompletionsClient, ModelClient
+from src.tidebound.prompting import load_character_bundle
+from src.tidebound.runtime.agent_loop import agent_loop
+from src.tidebound.runtime.types import Message, RunRecord
+from src.tidebound.storage.runs import RunStore
+from src.tidebound.tools.registry import create_tools
 
 logger = logging.getLogger(__name__)
 

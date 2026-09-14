@@ -5,10 +5,10 @@ import json
 import httpx
 import pytest
 
-from src.config import AgentSettings
-from src.errors import AgentError
-from src.llm import ChatCompletionsClient, wire_messages
-from src.runtime.types import Message
+from src.tidebound.config import AgentSettings
+from src.tidebound.errors import AgentError
+from src.tidebound.llm import ChatCompletionsClient, wire_messages
+from src.tidebound.runtime.types import Message
 
 
 def test_debug_stream(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

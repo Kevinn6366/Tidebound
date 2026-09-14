@@ -1,4 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => {
+  const result = await page.request.post('/api/auth/register', {
+    data: { username: `test-${randomUUID()}`, password: 'test-user-password' },
+  });
+  expect(result.status()).toBe(201);
+});
 
 test('完整原界面启动，全部设置页签保留', async ({ page }) => {
   const errors: string[] = [];
@@ -63,7 +71,7 @@ test('原背景上传和备份导出功能可用', async ({ page }) => {
   await page.goto('/app/');
   await page.getByRole('button', { name: 'SYSTEM', exact: true }).click();
   const upload = page.getByLabel('导入游戏背景图', { exact: true });
-  const saved = page.waitForResponse(response => response.request().method() === 'POST' && /\/api\/userdata\/preview\/(bg_images|app_image)/.test(response.url()));
+  const saved = page.waitForResponse(response => response.request().method() === 'POST' && /\/api\/userdata\/uid-\d{8}\/(bg_images|app_image)/.test(response.url()));
   await upload.setInputFiles({ name: 'test-background.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS9sAAAAASUVORK5CYII=', 'base64') });
   expect((await saved).status()).toBe(200);
   await page.getByRole('button', { name: '数据管理', exact: true }).click();
@@ -114,4 +122,32 @@ test('停止回复后不提交本轮，仍能继续发送', async ({ page }) => 
   await input.fill('继续');
   await input.press('Enter');
   await expect(input).toHaveValue('');
+});
+
+
+test('管理员登录后在专属 console 持续读取日志', async ({ page }) => {
+  await page.request.post('/api/auth/logout');
+  await page.goto('/app/');
+  await page.getByLabel('用户名', { exact: true }).fill('e2e-admin');
+  await page.getByLabel('密码', { exact: true }).fill('test-admin-password');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page).toHaveURL(/\/app\/uid-00000001$/);
+  await page.getByRole('link', { name: 'Console', exact: true }).click();
+  await expect(page).toHaveURL(/\/app\/uid-00000001\/console$/);
+  await expect(page.getByRole('heading', { name: 'LLM 运行日志' })).toBeVisible();
+  await expect(page.getByLabel('运行日志', { exact: true })).toContainText('日志控制台测试输出');
+  await page.screenshot({ path: 'test-results/admin-console.png' });
+  await page.reload();
+  await expect(page.getByLabel('运行日志', { exact: true })).toContainText('日志控制台测试输出');
+});
+
+test('普通用户界面不显示 console 且后端拒绝进入', async ({ page }) => {
+  await page.goto('/app/');
+  await expect(page.getByRole('button', { name: 'SYSTEM', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Console', exact: true })).toHaveCount(0);
+  const me = await (await page.request.get('/api/auth/me')).json();
+  expect((await page.request.get(`/app/${me.uid}/console`)).status()).toBe(403);
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+  expect((await page.request.get('/api/chat/session')).status()).toBe(401);
 });

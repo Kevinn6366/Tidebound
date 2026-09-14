@@ -1,4 +1,4 @@
-"""首版唯一工具：读取当前时间。"""
+"""当前时间工具：读取配置时区的真实时间。"""
 
 from datetime import datetime
 from zoneinfo import ZoneInfo

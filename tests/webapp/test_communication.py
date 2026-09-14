@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from src.config import AgentSettings
+from src.tidebound.config import AgentSettings
+from tests.support.account_store import FileUserStore
 from webapp.config import WebSettings
 from webapp.main import create_app
 
@@ -27,7 +28,7 @@ def client(tmp_path: Path) -> TestClient:
     models = tmp_path / "models" / "亚托莉 示例"
     models.mkdir(parents=True)
     (models / "atri.model3.json").write_text('{"Version": 3}', encoding="utf-8")
-    return TestClient(create_app(WebSettings(frontend_dist=dist, models_dir=models.parent, ui_data_dir=tmp_path / 'ui'), AgentSettings(data_dir=tmp_path / 'agent')))
+    return TestClient(create_app(WebSettings(frontend_dist=dist, models_dir=models.parent, ui_data_dir=tmp_path / 'ui'), AgentSettings(data_dir=tmp_path / 'agent'), user_store=FileUserStore(tmp_path / 'auth' / 'users.json')))
 
 
 def test_bootstrap_contract(client: TestClient) -> None:
@@ -39,8 +40,9 @@ def test_bootstrap_contract(client: TestClient) -> None:
     assert client.get("/api/health").json() == {"status": "ok", "service": "tidebound-webapp"}
     assert client.get("/api/capabilities").json() == {
         "mode": "agent-dev", "character": "atri", "tools": ["get_current_time"], "chat_interface": True, "settings": True,
-        "chat": False, "authentication": False, "history": True, "live2d": True,
+        "chat": False, "authentication": True, "history": True, "live2d": True,
     }
+    assert client.post("/api/auth/setup", json={"username": "admin", "password": "test-password"}).status_code == 201
     assert client.get("/api/login-config").json()["loginPageTitle"] == "汐伴 · Tidebound"
 
 
@@ -118,7 +120,7 @@ def test_missing_directories_do_not_break_api_or_create_data(tmp_path: Path) -> 
 
 @pytest.mark.parametrize("method,path", [
     ("POST", "/v1/chat/completions"), ("GET", "/v1/models"),
-    ("POST", "/api/auth/login"), ("POST", "/api/opencode/run"),
+    ("POST", "/api/opencode/run"),
     ("GET", "/api/bridge/pull"),
     ("GET", "/admin"), ("GET", "/admin/api/skills"),
 ])
@@ -130,6 +132,7 @@ def test_old_business_is_never_forwarded(client: TestClient, method: str, path: 
         method: 原上游接口的 HTTP 方法。
         path: 原上游业务接口路径。
     """
+    assert client.post("/api/auth/setup", json={"username": "admin", "password": "test-password"}).status_code == 201
     response = client.request(method, path)
     assert response.status_code == 501
     assert response.json()["detail"]["code"] == "not_migrated"

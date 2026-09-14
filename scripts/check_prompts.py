@@ -6,8 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.errors import AgentError
-from src.prompting import load_character_bundle
+from src.tidebound.errors import AgentError
+from src.tidebound.prompting import load_character_bundle
 
 
 def main() -> int:

@@ -48,3 +48,7 @@ HTTP Cookie 是开发预览的数据范围标识，不代表登录或管理员�
 - 浏览器：5 项通过，覆盖原完整界面与全部 12 个设置页签、发送失败保留草稿、Vite 开发模式、设置刷新恢复、背景上传与 ZIP 备份导出。
 - TypeScript 构建检查、恢复 JS 的语法/未定义标识符检查、Python lint 均通过。
 - 仍有第三方 Starlette/AnyIO 的 2 条弃用提示，以及恢复完整前端后 Vite 的单包体积提示；没有把这些提示隐藏为已修复。
+
+## 2026-09-14 账号与日志入口
+
+用户入口改为 `/app/{uid}`；MySQL 账号鉴权与管理员 `/app/{uid}/console` 已接入，覆盖此前预览 Cookie 和未接入账号的描述。Console 当前只读取固定 `data/agent-debug.log`。详见 [账号鉴权与日志 Console](accounts-and-console.md)。

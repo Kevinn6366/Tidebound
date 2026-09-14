@@ -1,12 +1,12 @@
-"""对话应用边界：输入校验与视图转换，执行归 src/runtime。"""
+"""对话应用边界：输入校验与视图转换，执行归 src/tidebound/runtime。"""
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.errors import AgentError
-from src.runtime.session import ChatSession
-from src.runtime.types import RunRecord
+from src.tidebound.errors import AgentError
+from src.tidebound.runtime.session import ChatSession
+from src.tidebound.runtime.types import RunRecord
 
 
 class ChatAttachment(BaseModel):

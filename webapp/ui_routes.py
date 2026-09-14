@@ -6,6 +6,7 @@ from pydantic import JsonValue
 from starlette.datastructures import UploadFile
 
 from backend.ui_store import UiStore
+from webapp.auth import current_user
 
 router = APIRouter()
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -16,7 +17,7 @@ def get_store(request: Request, mirror_id: str = 'preview') -> UiStore:
 
     Args:
         request: 已由预览中间件标识浏览器的请求。
-        mirror_id: 兼容原 UI 的资源命名空间，只接受 preview。
+        mirror_id: 兼容原 UI 的资源命名空间，接受当前 UID 或兼容别名 preview。
 
     Returns:
         当前浏览器自己的资源存储。
@@ -24,9 +25,10 @@ def get_store(request: Request, mirror_id: str = 'preview') -> UiStore:
     Raises:
         HTTPException: 请求其他命名空间时返回 403。
     """
-    if mirror_id != 'preview':
-        raise HTTPException(403, '当前仅支持本浏览器的开发预览数据')
-    return UiStore(request.app.state.settings.ui_data_dir / request.state.preview_id)
+    user = current_user(request)
+    if mirror_id not in ('preview', user.uid):
+        raise HTTPException(403, '无权访问其他用户的数据')
+    return UiStore(request.app.state.settings.ui_data_dir / user.scope)
 
 
 def file_response(store: UiStore, relative: str) -> FileResponse:
@@ -120,7 +122,7 @@ async def userdata(request: Request, mirror_id: str, resource: str) -> JsonValue
 
     Args:
         request: 原 UI 发送的请求；写入只发生于本浏览器的开发预览目录。
-        mirror_id: 原组件资源命名空间，必须为 preview。
+        mirror_id: 原组件资源命名空间，必须为当前 UID 或 preview。
         resource: core、batch、媒体或插件资源相对路由。
 
     Returns:

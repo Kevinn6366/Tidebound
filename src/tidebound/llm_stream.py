@@ -4,8 +4,8 @@ from collections.abc import AsyncIterator
 import httpx
 from pydantic import BaseModel, Field
 
-from src.debug import TerminalDebug
-from src.runtime.types import Message, ModelReply, ToolCall
+from src.tidebound.debug import TerminalDebug
+from src.tidebound.runtime.types import Message, ModelReply, ToolCall
 
 
 class FunctionDelta(BaseModel):

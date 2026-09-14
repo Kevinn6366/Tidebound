@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Request
 
 from backend.chat import ChatMessageInput, RunView, SessionView, run_view, session_view, submit_message
+from webapp.auth import current_user
 
 router = APIRouter()
 
@@ -19,7 +20,7 @@ async def create_chat_message(message: ChatMessageInput, request: Request) -> Ru
     Returns:
         可继续查询的执行状态。
     """
-    return submit_message(request.app.state.chat, request.state.preview_id, message)
+    return submit_message(request.app.state.chat, current_user(request).scope, message)
 
 
 @router.get("/api/chat/session")
@@ -32,7 +33,7 @@ async def get_session(request: Request) -> SessionView:
     Returns:
         服务端历史与活动执行。
     """
-    return session_view(request.app.state.chat, request.state.preview_id)
+    return session_view(request.app.state.chat, current_user(request).scope)
 
 
 @router.get("/api/chat/runs/{run_id}")
@@ -46,7 +47,7 @@ async def get_run(run_id: UUID, request: Request) -> RunView:
     Returns:
         执行视图，不存在时由异常处理器返回 404。
     """
-    return run_view(request.app.state.chat.get(request.state.preview_id, str(run_id)))
+    return run_view(request.app.state.chat.get(current_user(request).scope, str(run_id)))
 
 
 @router.post("/api/chat/runs/{run_id}/stop")
@@ -60,4 +61,4 @@ async def stop_run(run_id: UUID, request: Request) -> RunView:
     Returns:
         当前执行状态，已完成执行保持完成。
     """
-    return run_view(request.app.state.chat.stop(request.state.preview_id, str(run_id)))
+    return run_view(request.app.state.chat.stop(current_user(request).scope, str(run_id)))

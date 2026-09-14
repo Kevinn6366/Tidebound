@@ -7,7 +7,7 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, SecretStr
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class AgentSettings(BaseModel):

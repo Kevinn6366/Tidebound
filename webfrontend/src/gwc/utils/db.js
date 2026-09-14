@@ -1,3 +1,4 @@
+import { getSessionUser } from '../../services/authClient';
 import { frontendFetch as fetch } from '../../services/frontendFetch';
 // ==========================================
 // GWC 数据存储层 - 服务端 API 版本
@@ -8,7 +9,7 @@ const API_BASE = '';
 
 export const initDB = () => Promise.resolve(); // 兼容性占位
 
-export const getActiveMirrorId = () => 'preview';
+export const getActiveMirrorId = () => getSessionUser()?.uid || 'preview';
 
 // --- 通用 fetch 封装 ---
 async function apiFetch(path, options = {}) {

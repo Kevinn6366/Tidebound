@@ -6,11 +6,11 @@ from uuid import uuid4
 import httpx
 from pydantic import ValidationError
 
-from src.config import AgentSettings
-from src.debug import TerminalDebug
-from src.errors import AgentError
-from src.llm_stream import read_stream
-from src.runtime.types import Message, ModelReply, ToolCall
+from src.tidebound.config import AgentSettings
+from src.tidebound.debug import TerminalDebug
+from src.tidebound.errors import AgentError
+from src.tidebound.llm_stream import read_stream
+from src.tidebound.runtime.types import Message, ModelReply, ToolCall
 
 
 def wire_messages(system: str, messages: list[Message]) -> list[dict[str, object]]:

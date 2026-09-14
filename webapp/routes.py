@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 
 from webapp.assets import list_model_assets, resolve_public_file
+from webapp.auth import require_owner
 from webapp.config import WebSettings
 from webapp.schemas import CapabilitiesResponse, HealthResponse, LoginConfigResponse, ModelListResponse
 
@@ -66,15 +67,42 @@ def get_model_file(path: str, request: Request) -> FileResponse:
 
 @router.get("/")
 @router.get("/app")
-def redirect_frontend() -> RedirectResponse:
-    return RedirectResponse("/app/")
+def redirect_frontend(request: Request) -> RedirectResponse:
+    """将已登录用户导向自己的入口，访客导向登录页。
+
+    Args:
+        request: 携带可选登录身份的请求。
+
+    Returns:
+        用户入口或登录页的重定向。
+    """
+    user = request.state.user
+    return RedirectResponse(f"/app/{user.uid}" if user else "/app/")
 
 
-@router.get("/app/{path:path}")
-def get_frontend_file(path: str, request: Request) -> FileResponse:
+@router.get("/app/{uid}/console")
+def console_page(uid: str, request: Request) -> FileResponse:
+    """提供仅属于当前管理员的日志页面。
+
+    Args:
+        uid: URL 中的目标用户标识。
+        request: 带登录身份的请求。
+
+    Returns:
+        前端入口文件。
+
+    Raises:
+        HTTPException: 未登录、角色不足或请求其他用户时拒绝。
+    """
+    require_owner(request, uid, admin=True)
+    return get_frontend_file("index.html", request)
+
+
+@router.get("/app/{path:path}", response_model=None)
+def get_frontend_file(path: str, request: Request) -> FileResponse | RedirectResponse:
     """从新的构建目录提供页面与静态文件。
 
-    上游页面使用 hash 路由，缺失资源不能回退为 index.html。
+    用户入口由后端校验归属；内部设置沿用 hash 路由，缺失资源不能回退为 HTML。
 
     Args:
         path: 构建目录内的资源路径；空路径表示入口页面。
@@ -86,8 +114,13 @@ def get_frontend_file(path: str, request: Request) -> FileResponse:
     Raises:
         HTTPException: 未构建时返回 503；资源不存在或越界时返回 404。
     """
+    if path.startswith("uid-"):
+        require_owner(request, path.rstrip("/"))
+        path = "index.html"
+    elif not path and request.state.user is not None:
+        return RedirectResponse(f"/app/{request.state.user.uid}")
     settings: WebSettings = request.app.state.settings
-    if not path and not (settings.frontend_dist / "index.html").is_file():
+    if (not path or path == "index.html") and not (settings.frontend_dist / "index.html").is_file():
         raise HTTPException(503, "前端尚未构建，请在 webfrontend 执行 npm run build")
     target = resolve_public_file(settings.frontend_dist, path or "index.html")
     if target is None:

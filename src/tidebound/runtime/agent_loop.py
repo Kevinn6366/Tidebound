@@ -2,17 +2,17 @@
 
 import asyncio
 
-from src.config import AgentSettings
-from src.context.budget import select_messages
-from src.debug import TerminalDebug
-from src.errors import AgentError
-from src.llm import ModelClient
-from src.runtime.types import Message
-from src.tools.registry import ToolRegistry
+from src.tidebound.config import AgentSettings
+from src.tidebound.context.budget import select_messages
+from src.tidebound.debug import TerminalDebug
+from src.tidebound.errors import AgentError
+from src.tidebound.llm import ModelClient
+from src.tidebound.runtime.types import Message
+from src.tidebound.tools.registry import ToolMap, invoke_tool, tool_definitions
 
 
 async def agent_loop(system: str, history: list[list[Message]], current: list[Message],
-                     model: ModelClient, settings: AgentSettings, stop: asyncio.Event, registry: ToolRegistry) -> list[Message]:
+                     model: ModelClient, settings: AgentSettings, stop: asyncio.Event, registry: ToolMap) -> list[Message]:
     """执行有限模型循环，记录中间消息但仅返回完整轮次。
 
     Args:
@@ -30,7 +30,7 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
     Raises:
         AgentError: 停止、模型异常、协议错误、预算或循环次数超限。
     """
-    tools = registry.definitions()
+    tools = tool_definitions(registry)
     debug = TerminalDebug(settings.debug, "Agent")
     for step in range(settings.max_model_calls):
         debug.write("模型调用", f"第 {step + 1}/{settings.max_model_calls} 次\n")
@@ -63,7 +63,7 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
             if stop.is_set():
                 raise AgentError("run_stopped", "本次回复已停止。")
             debug.write("工具执行", f"{call.name}\n")
-            result = registry.invoke(call)
+            result = invoke_tool(registry, call)
             current.append(result)
             debug.write("工具结果", result.content + "\n")
     raise AgentError("model_call_limit", "本次执行已达到模型调用上限，未生成完整回复。", 502)

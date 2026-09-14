@@ -15,7 +15,7 @@ class CapabilitiesResponse(BaseModel):
     chat_interface: Literal[True] = True
     settings: Literal[True] = True
     chat: bool = False
-    authentication: Literal[False] = False
+    authentication: Literal[True] = True
     history: Literal[True] = True
     character: Literal["atri"] = "atri"
     tools: list[str] = ["get_current_time"]

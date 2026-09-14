@@ -5,7 +5,8 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from src.config import AgentSettings
+from src.tidebound.config import AgentSettings
+from tests.support.account_store import FileUserStore
 from webapp.config import WebSettings
 from webapp.main import create_app
 
@@ -19,7 +20,11 @@ def make_client(root: Path) -> TestClient:
     Returns:
         带独立 Cookie 容器的客户端。
     """
-    return TestClient(create_app(WebSettings(ui_data_dir=root), AgentSettings(data_dir=root / "agent")))
+    client = TestClient(create_app(WebSettings(ui_data_dir=root / "ui"),
+                                   AgentSettings(data_dir=root / "agent"), user_store=FileUserStore(root / "auth" / "users.json")))
+    mode = "setup" if client.get('/api/auth/status').json()['setup_required'] else "register"
+    assert client.post(f'/api/auth/{mode}', json={"username": uuid4().hex, "password": "test-password"}).status_code == 201
+    return client
 
 
 def test_chat_stub_does_not_store_or_generate(tmp_path: Path) -> None:
@@ -32,7 +37,7 @@ def test_chat_stub_does_not_store_or_generate(tmp_path: Path) -> None:
     response = client.post('/api/chat/messages', json={'run_id': str(uuid4()), 'content': '你好', 'attachments': []})
     assert response.status_code == 503
     assert response.json()['detail']['code'] == 'model_not_configured'
-    assert list(tmp_path.iterdir()) == []
+    assert not (tmp_path / "agent").exists()
     assert client.post('/api/chat/messages', json={'content': ''}).status_code == 422
     assert client.post('/api/chat/messages', json={'content': 'test', 'api_key': 'fake'}).status_code == 422
 
@@ -52,7 +57,7 @@ def test_settings_persist_and_are_isolated(tmp_path: Path) -> None:
     batch = first.get('/api/userdata/preview/batch?keys=live2d_settings_v35&media=true').json()
     assert batch['live2d_settings_v35']['typingSpeed'] == 60
     assert batch['_bgm'] == []
-    assert 'HttpOnly' in make_client(tmp_path).get('/api/health').headers['set-cookie']
+    assert first.cookies.get('tidebound_session')
 
 
 def test_media_upload_and_delete(tmp_path: Path) -> None:
@@ -123,4 +128,4 @@ def test_login_appearance_and_plugins_remain_editable(tmp_path: Path) -> None:
     upload = client.post(path + '/blob', files={'file': ('sprite.png', b'sprite', 'image/png')})
     assert upload.status_code == 200
     assert client.get(upload.json()['url']).content == b'sprite'
-    assert client.post('/api/auth/login', json={}).status_code == 501
+    assert client.post('/api/auth/login', json={}).status_code == 422

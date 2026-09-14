@@ -1,3 +1,5 @@
+import { getSessionUser } from './authClient';
+
 export interface ChatMessageInput {
   run_id: string;
   content: string;
@@ -26,7 +28,10 @@ export interface SessionView {
  * @throws 网络、HTTP 或 JSON 错误。
  */
 async function request(path: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(path, { ...init, credentials: 'same-origin' });
+  const headers = new Headers(init?.headers);
+  const user = getSessionUser();
+  if (user) headers.set('X-Tidebound-Uid', user.uid);
+  const response = await fetch(path, { ...init, headers, credentials: 'same-origin' });
   const data: unknown = await response.json();
   if (!response.ok) {
     if (typeof data === 'object' && data !== null && 'detail' in data) {

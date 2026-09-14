@@ -1,3 +1,4 @@
+import { getSessionUser, logout } from '../../services/authClient';
 import { frontendFetch as fetch } from '../../services/frontendFetch';
 // ==========================================
 // GWC 认证模块 - 服务端 API 版本
@@ -81,7 +82,9 @@ export async function loginUser(username, password, rememberMe = false) {
   }
 }
 
-export function logoutUser() {
+/** 注销服务端 Cookie 会话，成功后返回登录页。 */
+export async function logoutUser() {
+  await logout();
   clearToken();
   sessionStorage.removeItem(SESSION_KEY);
   clearRememberLogin();
@@ -89,7 +92,7 @@ export function logoutUser() {
 }
 
 export function getCurrentUser() {
-  return '开发预览';
+  return getSessionUser()?.username || '';
 }
 
 export function isLoggedIn() {

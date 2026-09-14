@@ -1,0 +1,16 @@
+.account-screen,.console-screen{min-height:100vh;background:#111923;color:#e7edf3;font-family:system-ui,sans-serif}
+.account-screen{display:grid;place-items:center;padding:32px}
+.account-card{width:min(100%,400px);padding:36px;border:1px solid #334252;border-radius:20px;background:#1b2633;box-shadow:0 20px 70px #0004}
+.account-brand{font-size:12px;letter-spacing:2px;color:#99c9d0;margin:0 0 18px}
+.account-card h1,.console-screen h1{font-size:28px;font-weight:650;margin:0 0 12px}
+.account-card p{line-height:1.7}.account-card label{display:block;margin:22px 0 8px;font-size:14px}
+.account-card input{display:block;margin-top:8px;width:100%;box-sizing:border-box;background:#101a25;border:1px solid #486074;border-radius:8px;padding:12px;color:#fff}
+.account-card button{margin-top:22px;width:100%;background:#a6d8db;color:#11262a;border-radius:8px;padding:12px;font-weight:650;cursor:pointer}
+.account-card button:disabled{opacity:.5}.account-card .account-secondary{margin-top:10px;background:transparent;color:#b2cbd4}
+.account-error{color:#ffaaaa;padding:12px;border:1px solid #704747;border-radius:8px;white-space:pre-wrap}
+.console-screen{padding:40px max(24px,calc((100vw - 1120px)/2));box-sizing:border-box;overflow:auto;height:100vh}
+.console-screen header{display:flex;justify-content:space-between;align-items:center;gap:24px}.console-screen a{color:#abdce0;text-decoration:underline}
+.console-hint{color:#a5b6c5;margin:24px 0}.console-empty{padding:64px 24px;text-align:center;border:1px dashed #456;border-radius:12px}
+.account-toolbar{position:fixed;right:20px;top:12px;z-index:200;color:#fff;font:12px system-ui;background:#142331d9;padding:8px 14px;border:1px solid #567;border-radius:20px;display:flex;gap:16px;align-items:center}.account-toolbar a{color:#bee7ec;text-decoration:underline}.account-toolbar button{cursor:pointer}
+
+.console-controls{display:flex;justify-content:space-between;gap:16px;align-items:center;margin:24px 0;color:#a5b6c5;font-size:13px}.console-output{white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto;height:calc(100vh - 230px);min-height:240px;padding:24px;background:#0b121b;border:1px solid #344656;border-radius:10px;line-height:1.7;font:13px/1.7 ui-monospace,monospace}

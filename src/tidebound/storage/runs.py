@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from src.runtime.types import RunRecord
+from src.tidebound.runtime.types import RunRecord
 
 
 class RunStore:

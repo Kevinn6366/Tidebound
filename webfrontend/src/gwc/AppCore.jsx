@@ -2674,9 +2674,7 @@ export default function AppCore({ router }) {
   const handleLogout = () => {
     setConfirmDialog({ isOpen: true, text: '确定要退出登录吗？\n请确保已保存当前进度。', onConfirm: () => {
       setConfirmDialog({ isOpen: false, text: '', onConfirm: null });
-      logoutUser();
-      window.location.hash = '/login';
-      window.location.reload();
+      logoutUser().catch(error => showToast(error.message || '退出失败', 'error'));
     }});
   };
 

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from src.config import ROOT
-from src.errors import AgentError
-from src.prompting import load_character_bundle
+from src.tidebound.config import ROOT
+from src.tidebound.errors import AgentError
+from src.tidebound.prompting import load_character_bundle
 
 
 def test_replaced_directory_changes_content(tmp_path: Path) -> None:

@@ -1,3 +1,5 @@
+import { getSessionUser } from './authClient';
+
 /**
  * 为恢复的上游 UI 集中处理 HTTP 失败，防止设置操作把 501 当作成功。
  * @param input - 原设置组件提供的请求地址或 Request。
@@ -12,7 +14,11 @@ export async function frontendFetch(input: RequestInfo | URL, init?: RequestInit
   if (!['blob:', 'data:'].includes(url.protocol) && url.origin !== window.location.origin) {
     throw new Error('该外部服务尚未接入新后端');
   }
-  const response = await fetch(input, init);
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+  const user = getSessionUser();
+  if (user && url.origin === window.location.origin) headers.set('X-Tidebound-Uid', user.uid);
+  const response = await fetch(input, { ...init, headers });
   if (!response.ok && response.status !== 404) {
     throw new Error(response.status === 501 ? '该后端功能尚未接入，原界面与配置已保留' : `请求失败（${response.status}）`);
   }

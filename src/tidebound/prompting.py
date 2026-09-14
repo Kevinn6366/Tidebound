@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from src.errors import AgentError
+from src.tidebound.errors import AgentError
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
