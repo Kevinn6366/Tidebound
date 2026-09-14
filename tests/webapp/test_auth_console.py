@@ -158,3 +158,46 @@ def test_cross_origin_cannot_initialize_or_login(tmp_path: Path) -> None:
         assert client.post(f'/api/auth/{path}', json=CREDENTIALS,
                            headers={'origin': 'https://evil.example'}).status_code == 403
     assert client.get('/api/auth/status').json()['setup_required'] is True
+
+
+def test_console_complete_requests_permissions_and_no_truncation(tmp_path: Path) -> None:
+    """完整请求独立于日志截断，且仅管理员可读取。
+
+    Args:
+        tmp_path: 隔离服务与快照目录。
+    """
+    from src.tidebound.storage.model_requests import ModelRequestStore, request_run, request_step
+
+    app = make_app(tmp_path)
+    admin, user, anonymous = (TestClient(app) for _ in range(3))
+    admin.post('/api/auth/setup', json=CREDENTIALS)
+    user.post('/api/auth/register', json=CREDENTIALS | {'username': 'ordinary'})
+    store = ModelRequestStore(tmp_path / 'agent')
+    run_token = request_run.set((uuid4().hex, str(uuid4())))
+    step_token = request_step.set(1)
+    body = {'model': 'fixture', 'messages': [{'role': 'system', 'content': '完整上下文\n' * 60000}], 'tools': []}
+    try:
+        snapshot = store.save(body)
+    finally:
+        request_run.reset(run_token)
+        request_step.reset(step_token)
+    endpoint = '/api/users/uid-00000001/console/requests'
+    assert anonymous.get(endpoint).status_code == 401
+    assert user.get(endpoint).status_code == 403
+    assert user.get('/api/users/uid-00000002/console/requests').status_code == 403
+    assert admin.get('/api/users/uid-00000002/console/requests').status_code == 403
+    assert admin.get(endpoint).json()[0]['request_id'] == snapshot.request_id
+    assert 'body' not in admin.get(endpoint).json()[0]
+    assert admin.get(endpoint + '?offset=50').json() == []
+    groups_endpoint = '/api/users/uid-00000001/console/request-runs'
+    assert anonymous.get(groups_endpoint).status_code == 401
+    assert user.get(groups_endpoint).status_code == 403
+    assert admin.get(groups_endpoint).json()[0]['requests'][0]['request_id'] == snapshot.request_id
+    assert admin.get(groups_endpoint + '?offset=50').json() == []
+    detail = endpoint + '/' + snapshot.request_id
+    assert user.get(detail).status_code == 403
+    response = admin.get(detail)
+    assert response.headers['cache-control'] == 'no-store'
+    assert response.json()['body'] == body
+    assert admin.get(endpoint + '/' + str(uuid4())).status_code == 404
+    assert admin.get(endpoint + '/invalid-path').status_code == 422

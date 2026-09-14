@@ -8,3 +8,10 @@ prompts:
           name: chat.character-zh
           segments:
             - content: "@master/chat.character/chat.character-zh.md"
+  tools.injection.timetools:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.injection.timetools-zh
+          segments:
+            - content: "@master/tools.injection/tools.injection.timetools.md"

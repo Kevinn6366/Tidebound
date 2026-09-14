@@ -4,7 +4,7 @@
 
 跟踪事项：[GitHub issue #1 — 上下文预算与材料选取、场景提示词 bundle 注入](https://github.com/Kevinn6366/Tidebound/issues/1)。
 
-状态：方向已确认，未来待实现，预算参数与注入协议尚待细化。本文依据 kevin6366 对 SillyTavern 架构学习讨论的最新确认，补充 [宏观架构规格](architecture.md)，对应 `OPEN-01`、`OPEN-09` 和 `OPEN-10` 的部分内容，不表示这些事项已全部关闭。
+状态：分项预算与场景注入方向已确认，未来待实现，具体协议尚待细化。当前角色与工具规则的注入已按 [提示词分层与注入](prompt-injection.md) 实现，不代表本文的场景与复杂材料选取已完成。本文依据 kevin6366 对 SillyTavern 架构学习讨论的最新确认，补充 [宏观架构规格](architecture.md)，对应 `OPEN-01`、`OPEN-09` 和 `OPEN-10` 的部分内容，不表示这些事项已全部关闭。
 
 ## 一、目标与范围
 

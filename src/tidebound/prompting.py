@@ -68,42 +68,110 @@ class PromptBundle:
 
 
 def load_character_bundle(root: Path) -> PromptBundle:
-    """校验并加载唯一的中文 chat.character 默认包。
+    """加载独立的角色提示词，不附带工具使用规则。
 
     Args:
-        root: 可整体替换的提示词目录，必须包含 master.yaml。
+        root: 包含 master.yaml 的提示词目录。
 
     Returns:
-        按 segment 顺序组装且去掉版本注释的提示词。
+        角色包正文及文件来源。
 
     Raises:
-        AgentError: manifest、路径、名称或模板不符合首版支持范围。
+        AgentError: 角色包或 manifest 不合法。
+    """
+    return load_prompt_bundles(root, ("chat.character",))
+
+
+def load_tool_injections(root: Path, purposes: tuple[str, ...]) -> str:
+    """加载本批工具调用对应的临时规则，供下一次模型请求使用。
+
+    Args:
+        root: 包含 master.yaml 的提示词目录。
+        purposes: 已调用工具声明的注入标识，按调用顺序去重。
+
+    Returns:
+        拼接后的工具规则；无标识时返回空文本。
+
+    Raises:
+        AgentError: 注入标识、manifest 或规则文件不合法。
+    """
+    if not purposes:
+        return ""
+    if any(not purpose.startswith("tools.injection.") for purpose in purposes):
+        raise AgentError("invalid_prompt_bundle", "工具注入标识非法。", 503)
+    return load_prompt_bundles(root, purposes).content
+
+
+def load_prompt_bundles(root: Path, purposes: tuple[str, ...]) -> PromptBundle:
+    """按逻辑标识加载静态提示词包并保留来源。
+
+    Args:
+        root: 包含 master.yaml 的提示词根目录。
+        purposes: 非空的包标识列表，按顺序去重拼接。
+
+    Returns:
+        选中包的内容与文件来源，名称取第一个包。
+
+    Raises:
+        AgentError: 标识缺失、manifest、路径或模板不合法。
     """
     try:
         root = root.resolve(strict=True)
-        manifest = Manifest.model_validate(yaml.load((root / "master.yaml").read_text(encoding="utf-8"), Loader=UniqueKeyLoader))
-        if set(manifest.prompts) != {"chat.character"}:
-            raise ValueError("首版只支持 chat.character")
-        languages = manifest.prompts["chat.character"]
-        if len(languages) != 1 or languages[0].language != "zh" or len(languages[0].variants) != 1:
-            raise ValueError("首版只支持一个中文默认包")
-        variant = languages[0].variants[0]
-        if variant.variant != "-" or not variant.name.strip():
-            raise ValueError("包名称或默认变体非法")
+        manifest = Manifest.model_validate(yaml.load(
+            (root / "master.yaml").read_text(encoding="utf-8"), Loader=UniqueKeyLoader,
+        ))
+        if "chat.character" not in manifest.prompts or any(
+            purpose != "chat.character" and not purpose.startswith("tools.injection.")
+            for purpose in manifest.prompts
+        ):
+            raise ValueError("只支持角色与工具注入 purpose")
+        variants: dict[str, Variant] = {}
+        names: set[str] = set()
+        for purpose, languages in manifest.prompts.items():
+            if len(languages) != 1 or languages[0].language != "zh" or len(languages[0].variants) != 1:
+                raise ValueError("每个 purpose 只支持一个中文默认包")
+            variant = languages[0].variants[0]
+            if variant.variant != "-" or not variant.name.strip() or variant.name in names:
+                raise ValueError("包名称重复或默认变体非法")
+            variants[purpose] = variant
+            names.add(variant.name)
+        if not purposes or any(purpose not in variants for purpose in purposes):
+            raise ValueError("工具注入 purpose 非法或缺失")
         files: list[Path] = []
         parts: list[str] = []
-        for segment in variant.segments:
-            if not segment.content.startswith("@"):
-                raise ValueError("segment 必须引用文件")
-            path = (root / segment.content[1:]).resolve(strict=True)
-            if not path.is_relative_to(root) or path.suffix != ".md" or path in files:
-                raise ValueError("文件越界、重复或类型非法")
-            content = path.read_text(encoding="utf-8")
-            content = re.sub(r"\{\{/\*.*?\*/\}\}", "", content, flags=re.DOTALL).strip()
-            if not content or "{{" in content or "}}" in content:
-                raise ValueError("内容为空或使用了尚未支持的动态模板")
-            files.append(path)
-            parts.append(content)
-        return PromptBundle(variant.name, "\n\n".join(parts), tuple(files))
+        for purpose in dict.fromkeys(purposes):
+            for segment in variants[purpose].segments:
+                path, content = load_prompt_segment(root, segment)
+                if path in files:
+                    raise ValueError("提示词文件重复引用")
+                files.append(path)
+                parts.append(content)
+        return PromptBundle(variants[purposes[0]].name, "\n\n".join(parts), tuple(files))
     except (OSError, ValueError, ValidationError, yaml.YAMLError) as error:
-        raise AgentError("invalid_prompt_bundle", "角色提示词包无法加载，请检查 master.yaml 与引用文件。", 503) from error
+        raise AgentError("invalid_prompt_bundle", "提示词包无法加载，请检查 master.yaml 与引用文件。", 503) from error
+
+
+def load_prompt_segment(root: Path, segment: Segment) -> tuple[Path, str]:
+    """读取范围内的静态提示词文件并去除版本注释。
+
+    Args:
+        root: 已解析的提示词根目录。
+        segment: manifest 中待加载的文件引用。
+
+    Returns:
+        真实文件路径与去除版本注释后的正文。
+
+    Raises:
+        OSError: 文件无法读取。
+        ValueError: 引用越界、类型非法、正文为空或包含动态模板。
+    """
+    if not segment.content.startswith("@"):
+        raise ValueError("segment 必须引用文件")
+    path = (root / segment.content[1:]).resolve(strict=True)
+    if not path.is_relative_to(root) or path.suffix != ".md":
+        raise ValueError("文件越界或类型非法")
+    content = path.read_text(encoding="utf-8")
+    content = re.sub(r"\{\{/\*.*?\*/\}\}", "", content, flags=re.DOTALL).strip()
+    if not content or "{{" in content or "}}" in content:
+        raise ValueError("内容为空或使用了尚未支持的动态模板")
+    return path, content

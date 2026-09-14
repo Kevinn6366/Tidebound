@@ -7,7 +7,9 @@ from src.tidebound.context.budget import select_messages
 from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ModelClient
+from src.tidebound.prompting import load_tool_injections
 from src.tidebound.runtime.types import Message
+from src.tidebound.storage.model_requests import request_injection, request_step
 from src.tidebound.tools.registry import ToolMap, invoke_tool, tool_definitions
 
 
@@ -32,12 +34,22 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
     """
     tools = tool_definitions(registry)
     debug = TerminalDebug(settings.debug, "Agent")
+    injection = ""
     for step in range(settings.max_model_calls):
         debug.write("模型调用", f"第 {step + 1}/{settings.max_model_calls} 次\n")
         if stop.is_set():
             raise AgentError("run_stopped", "本次回复已停止。")
-        messages = select_messages(system, history, current, tools, settings)
-        model_task = asyncio.create_task(model.complete(system, messages, tools))
+        request_system = "\n\n".join(part for part in (system, injection) if part)
+        current_injection = injection
+        injection = ""  # 上批工具规则仅用于紧接着的一次请求，不进入消息历史。
+        messages = select_messages(request_system, history, current, tools, settings)
+        step_token = request_step.set(step + 1)
+        injection_token = request_injection.set(current_injection)
+        try:
+            model_task = asyncio.create_task(model.complete(request_system, messages, tools))
+        finally:
+            request_step.reset(step_token)
+            request_injection.reset(injection_token)
         stop_task = asyncio.create_task(stop.wait())
         try:
             await asyncio.wait({model_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -59,6 +71,7 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
             return current
         if len(message.tool_calls) > 8 or len({c.id for c in message.tool_calls}) != len(message.tool_calls):
             raise AgentError("invalid_tool_calls", "模型工具调用数量或标识非法。", 502)
+        injection_purposes: list[str] = []
         for call in message.tool_calls:
             if stop.is_set():
                 raise AgentError("run_stopped", "本次回复已停止。")
@@ -66,4 +79,8 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
             result = invoke_tool(registry, call)
             current.append(result)
             debug.write("工具结果", result.content + "\n")
+            tool = registry.get(call.name)
+            if tool is not None and "injection" in tool:
+                injection_purposes.append(tool["injection"])
+        injection = load_tool_injections(settings.prompts_dir, tuple(injection_purposes))
     raise AgentError("model_call_limit", "本次执行已达到模型调用上限，未生成完整回复。", 502)

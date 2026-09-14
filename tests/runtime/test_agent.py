@@ -161,3 +161,67 @@ def test_budget_keeps_complete_turns_and_mandatory_input() -> None:
     assert select_messages("atri", [old, recent], current, [], settings) == recent + current
     with pytest.raises(AgentError):
         select_messages("atri", [], old, [], settings)
+
+
+def test_injection_only_follows_tool_call_and_does_not_enter_history(tmp_path: Path) -> None:
+    """验证调用后单次生效、重复触发以及跨轮不持久化。"""
+    class InspectingModel:
+        def __init__(self) -> None:
+            self.systems: list[str] = []
+
+        async def complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:
+            """记录系统内容并模拟时间、未知、时间工具调用及最终回复。
+
+            Args:
+                system: 实际请求的系统内容。
+                messages: 历史与本轮消息。
+                tools: 可用工具声明。
+
+            Returns:
+                当前步骤的受控模型回复。
+            """
+            self.systems.append(system)
+            step = len(self.systems)
+            if step in (1, 3):
+                return tool_reply()
+            if step == 2:
+                return tool_reply("unknown")
+            return final_reply()
+
+    async def scenario() -> None:
+        model = InspectingModel()
+        service = ChatSession(AgentSettings(base_url="http://fixture", model="test", data_dir=tmp_path), model)
+        owner, run_id = uuid4().hex, str(uuid4())
+        service.start(owner, run_id, "现在几点")
+        await service.active[owner].task
+        record = service.get(owner, run_id)
+        assert record.status == "completed"
+        rule = "先获取当前时间再回答"
+        assert [rule in system for system in model.systems] == [False, True, False, True]
+        assert all(rule not in message.content for message in record.messages)
+        service.start(owner, str(uuid4()), "下一轮")
+        await service.active[owner].task
+        assert rule not in model.systems[-1]
+
+    asyncio.run(scenario())
+
+
+def test_oversized_injection_blocks_next_model_request(tmp_path: Path) -> None:
+    """工具后注入超限时应失败，不能绕过预算发送第二次请求。"""
+    import shutil
+
+    from src.tidebound.config import ROOT
+
+    root = tmp_path / "prompts"
+    shutil.copytree(ROOT / "prompts", root)
+    (root / "master/tools.injection/tools.injection.timetools.md").write_text("规则" * 20000, encoding="utf-8")
+
+    async def scenario() -> None:
+        model = ScriptedModel([tool_reply(), final_reply()])
+        with pytest.raises(AgentError) as failure:
+            await agent_loop("atri", [], [Message(role="user", content="几点了")], model,
+                             AgentSettings(prompts_dir=root), asyncio.Event(), create_tools("UTC"))
+        assert failure.value.code == "context_budget_exceeded"
+        assert len(model.inputs) == 1
+
+    asyncio.run(scenario())

@@ -283,3 +283,11 @@ Prompt bundle 对应 `OPEN-10`，spec 治理与首个交付对应 `OPEN-11`。�
 ## 2026-09-14 账号与内核目录修订
 
 用户确认将 Agent 相关模块统一归入 `src/tidebound/`，包含 runtime、context、memory、workflows、tools、sandbox、storage 和模型/配置入口。账号现接入 MySQL，以服务端会话验证 UID 与 user/admin 角色；FastAPI 与应用展示转换仍分别位于 `webapp/` 和 `backend/`。本地管理员 console 按用户最新要求仅显示 `data/agent-debug.log`，此开发日志当前未按用户过滤。实现范围、路由与运行方式见 [账号鉴权与日志 Console](accounts-and-console.md)。
+
+## 2026-09-14 提示词注入分层修订
+
+工具使用规则从角色内容拆出，统一放在 `prompts/master/tools.injection/`，通过 `tools.injection.*` purpose 在模型调用工具、后端回填结果后加载，仅注入紧接着的一次模型请求。首次请求不注入，规则不进入历史；本次临时规则参与请求预算，工具结果仍按 tool 消息回填。当前已接入时间工具组；目录、启用、组装与未来注入边界以 [提示词分层与注入](prompt-injection.md) 为准，覆盖前文仅有角色包的旧表述。
+
+## 2026-09-14 Console 完整上下文修订
+
+管理员 console 提供“查看完整 LLM 对话上下文”和“查看日志”两个独立入口。模型适配器在发送前保存完整请求正文，按 Run 与调用次数关联，支持查看实际历史、一次性注入及工具声明。请求快照是独立审计资料，不进入有效聊天历史；此修订覆盖前文 console 仅查看日志的范围，具体存储与权限见 [账号与日志 Console](accounts-and-console.md)。

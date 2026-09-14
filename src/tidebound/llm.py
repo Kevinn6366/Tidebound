@@ -11,13 +11,14 @@ from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm_stream import read_stream
 from src.tidebound.runtime.types import Message, ModelReply, ToolCall
+from src.tidebound.storage.model_requests import ModelRequestStore
 
 
 def wire_messages(system: str, messages: list[Message]) -> list[dict[str, object]]:
     """在模型边界将内部消息转换成兼容接口结构。
 
     Args:
-        system: 本轮固定的角色提示词。
+        system: 本次请求的角色提示词及有效的一次性工具规则。
         messages: 已完成预算选取的历史与本轮消息。
 
     Returns:
@@ -56,15 +57,16 @@ class ChatCompletionsClient:
         """调用后端配置的模型并校验完整响应。
 
         Args:
-            system: 已加载的角色内容。
+            system: 本次请求的角色内容及有效的一次性注入。
             messages: 有效的本次调用消息。
-            tools: 唯一获准的时间工具定义。
+            tools: 当前获准的工具定义。
 
         Returns:
             模型消息和结束原因。
 
         Raises:
             AgentError: 网络、供应商 HTTP 或响应协议错误；不回传原始响应。
+            OSError: 完整请求快照写入失败，不继续发送请求。
         """
         headers = {"Content-Type": "application/json"}
         if self.settings.api_key.get_secret_value():
@@ -76,6 +78,9 @@ class ChatCompletionsClient:
                    "max_tokens": self.settings.max_output_tokens}
         if self.settings.reasoning_effort is not None:
             request["reasoning_effort"] = self.settings.reasoning_effort
+        snapshot = ModelRequestStore(self.settings.data_dir).save(request)
+        if snapshot is not None:
+            debug.write("完整请求", f"run={snapshot.run_id}, step={snapshot.step}, request={snapshot.request_id}（Console 查看）\n")
         try:
             async with httpx.AsyncClient(timeout=self.settings.timeout_seconds, trust_env=False) as client:
                 url = self.settings.base_url.rstrip("/") + "/chat/completions"

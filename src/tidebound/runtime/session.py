@@ -13,6 +13,7 @@ from src.tidebound.llm import ChatCompletionsClient, ModelClient
 from src.tidebound.prompting import load_character_bundle
 from src.tidebound.runtime.agent_loop import agent_loop
 from src.tidebound.runtime.types import Message, RunRecord
+from src.tidebound.storage.model_requests import request_run
 from src.tidebound.storage.runs import RunStore
 from src.tidebound.tools.registry import create_tools
 
@@ -126,6 +127,7 @@ class ChatSession:
             history: 开始时的有效历史。
             stop: 设置后不能提交成功结果的停止信号。
         """
+        context_token = request_run.set((owner, record.run_id))
         record.messages = [Message(role="user", content=record.user_content)]
         try:
             async with asyncio.timeout(self.settings.timeout_seconds):
@@ -144,6 +146,7 @@ class ChatSession:
             logger.error("Agent execution failed: %s", type(error).__name__)
             record.status, record.error_code, record.error = "failed", "internal_error", "执行失败，本轮未提交。"
         finally:
+            request_run.reset(context_token)
             TerminalDebug(self.settings.debug, record.run_id[:8]).write("执行状态", f"{record.status}: {record.error_code or 'ok'}\n")
             try:
                 # 检查与原子写之间无 await，停止不能插入成功提交中间。

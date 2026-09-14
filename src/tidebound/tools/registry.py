@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Callable
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -20,6 +20,7 @@ class ToolEntry(TypedDict):
     """注册字典的字段类型，仅用于类型检查，不封装工具行为。"""
 
     description: str
+    injection: NotRequired[str]
     arguments: type[BaseModel]
     execute: Callable[[BaseModel], object]
 
@@ -56,6 +57,7 @@ def register_current_time(tools: ToolMap, timezone: str) -> None:
 
     tools["get_current_time"] = {
         "description": "获取当前日期和时间。",
+        "injection": "tools.injection.timetools",
         "arguments": EmptyArguments,
         "execute": execute,
     }

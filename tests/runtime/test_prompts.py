@@ -40,3 +40,19 @@ def test_invalid_bundle(tmp_path: Path, change: str) -> None:
     with pytest.raises(AgentError) as failure:
         load_character_bundle(root)
     assert failure.value.code == "invalid_prompt_bundle"
+
+
+def test_tool_injection_is_separate_and_deduplicated(tmp_path: Path) -> None:
+    from src.tidebound.prompting import load_tool_injections
+
+    shutil.copytree(ROOT / "prompts", tmp_path / "prompts")
+    root = tmp_path / "prompts"
+    purpose = "tools.injection.timetools"
+    assert "先获取当前时间再回答" not in load_character_bundle(root).content
+    content = load_tool_injections(root, (purpose, purpose))
+    assert content.count("先获取当前时间再回答") == 1
+    assert "{{" not in content
+    (root / "master/tools.injection/tools.injection.timetools.md").unlink()
+    assert load_character_bundle(root).content
+    with pytest.raises(AgentError):
+        load_tool_injections(root, (purpose,))

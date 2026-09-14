@@ -1,6 +1,6 @@
 # Agent loop v0.01
 
-日期：2026-09-14。用户最新确认的首版交付覆盖本文件与旧规格冲突的范围：前后端固定 atri，整个 `prompts/` 是亚托莉的一套提示词，后续通过替换整个目录替换内容；当前只有 `chat.character`。旧 `characters/atri`、`shared`、`workflows/summary` 的提示词目录划分废止。
+日期：2026-09-14。用户最新确认的首版交付覆盖本文件与旧规格冲突的范围：前后端固定 atri，整个 `prompts/` 是亚托莉的一套提示词，后续通过替换整个目录替换内容；当前包含 `chat.character` 与工具调用后一次性使用的 `tools.injection.*`，注入设计见 [提示词分层与注入](prompt-injection.md)。旧 `characters/atri`、`shared`、`workflows/summary` 的提示词目录划分废止。
 
 ## 最小闭环
 
@@ -11,7 +11,7 @@
 - 唯一工具 `get_current_time`，无参数，返回配置时区的 ISO 时间、时区与 Unix 时间戳。工具名称、参数对象和允许字段由代码检查。
 - 工具调用消息与结果追加到本次执行的消息中，再次调用模型；无工具调用且正常返回正文时完成。截断、异常、超时或调用次数超限均失败，不把中间文本当作最终回复。
 - 最多 4 次模型调用，每批最多 8 个工具调用，模型输出预留默认 2,048 tokens，总执行超时默认 120 秒；这些是 v0.01 可配置保护值，不是未来材料预算分配算法。
-- 上下文保留角色提示词、本轮消息与装得下的最近完整已提交轮次。使用请求 JSON 的 UTF-8 字节数加格式余量保守约束 byte-tokenizer 兼容请求；这不是供应商精确计费统计。复杂材料配额、summary 与场景注入仍由未来 issue #1 跟踪。
+- 上下文保留角色提示词、本次请求的一次性工具规则、本轮消息与装得下的最近完整已提交轮次。使用请求 JSON 的 UTF-8 字节数加格式余量保守约束 byte-tokenizer 兼容请求；这不是供应商精确计费统计。复杂材料配额、summary 与场景注入仍由未来 issue #1 跟踪。
 
 ## 工具边界（采纳酒馆的五项设计）
 
@@ -33,9 +33,9 @@ HTTP 提交返回 Run ID，浏览器查询状态；刷新或断线不等同于�
 
 ## Prompt manifest
 
-参考用户指定的 `takecopter-prompts/prompts` 组织：`prompts/master.yaml` 内为 `prompts → chat.character → language → variants → name/segments`，内容引用 `@master/chat.character/chat.character-zh.md`。不接入 Bamfly/Heathrow、Nelu 远端或模型配置引用机制。
+参考用户指定的 `takecopter-prompts/prompts` 组织：`prompts/master.yaml` 内为 `prompts → chat.character → language → variants → name/segments`，角色内容引用 `@master/chat.character/chat.character-zh.md`，时间规则通过独立 purpose `tools.injection.timetools` 引用 `@master/tools.injection/tools.injection.timetools.md`。不接入 Bamfly/Heathrow、Nelu 远端或模型配置引用机制。
 
-内容使用静态 Markdown；支持去除 Go 模板风格的版本注释，其他模板指令首版明确拒绝，避免把未执行的模板发送给模型。加载器校验 manifest、唯一名称、文件引用和路径范围，依次拼接 segments。运行开始时加载一次，整轮使用同一份内容；替换目录后从下一轮生效。
+内容使用静态 Markdown；支持去除 Go 模板风格的版本注释，其他模板指令首版明确拒绝，避免把未执行的模板发送给模型。加载器校验 manifest、唯一名称、文件引用和路径范围，依次拼接所选包的 segments；角色在 Run 开始时加载并固定。工具规则在调用结果回填后按调用顺序去重加载，仅拼入紧接着的一次模型请求，不持久化进历史；后续工具调用可以重新触发并读取最新文件。
 
 ## 验证范围
 
@@ -47,6 +47,6 @@ HTTP 提交返回 Run ID，浏览器查询状态；刷新或断线不等同于�
 
 `TIDEBOUND_DEBUG=true` 时使用模型 SSE 输出，在后端终端实时展示供应商返回的 `reasoning_content`、回复及工具调用，标记请求与执行状态；关闭时继续使用非流式接口。不会为不返回思考字段的模型伪造思考文本。终端调试输出不代表完成提交，缺失结束标记、流错误、停止或超时仍按失败/停止处理。
 
-模型返回的思考字段随 assistant 消息保存在本地执行记录中，并在后续模型调用时按协议回传，也计入上下文预算；用户页面的正式回复仍只取 `content`。请求头、API Key 和完整请求提示词不写入调试输出。GLM-5.3 推理强度可通过可选的 `TIDEBOUND_LLM_REASONING_EFFORT` 配置。
+模型返回的思考字段随 assistant 消息保存在本地执行记录中，并在后续模型调用时按协议回传，也计入上下文预算；用户页面的正式回复仍只取 `content`。请求头、API Key 和完整请求提示词不写入终端调试输出；完整请求正文独立保存为管理员 console 快照，见 [账号与日志 Console](accounts-and-console.md)。GLM-5.3 推理强度可通过可选的 `TIDEBOUND_LLM_REASONING_EFFORT` 配置。
 
 参考：[智谱思考模式](https://docs.bigmodel.cn/cn/guide/capabilities/thinking-mode)、[流式工具输出](https://docs.bigmodel.cn/cn/guide/capabilities/stream-tool)。
