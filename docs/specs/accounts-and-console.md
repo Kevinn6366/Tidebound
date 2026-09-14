@@ -4,7 +4,9 @@
 
 ## 目录与运行范围
 
-`src/tidebound/` 包含 runtime、context、tools、storage、memory、workflows、sandbox，以及模型、提示词加载、配置、错误和调试模块。memory、workflows、sandbox 仍为空职责目录，不表示能力已实现。根目录 `backend/` 负责应用编排与展示转换，`webapp/` 负责 FastAPI 通信。
+`src/tidebound/` 包含 runtime、context、tools、storage、memory、workflows、sandbox，以及模型、提示词加载、配置、错误和调试模块。memory、workflows、sandbox 仍为空职责目录，不表示能力已实现。根目录 `backend/` 负责应用编排与展示转换，`webapp/` 负责 FastAPI 通信与身份权限边界。认证、密码校验、登录会话、权限依赖及 HTTP 鉴权中间件统一放在 `webapp/auth/`，不在 `backend/` 中另设鉴权实现。
+
+`webapp/auth/service.py` 管理密码验证和登录会话，`dependencies.py` 校验当前身份与账号权限，`routes.py` 提供账号 HTTP 接口，`middleware.py` 处理请求认证、私有入口及跨来源限制。MySQL 账号数据读写仍由 `src/tidebound/storage/users.py` 负责；数据访问层不承担 HTTP 鉴权。
 
 当前仍是本地单进程、单 worker dev。账号改为 MySQL 持久化；聊天执行记录仍按内部归属 UUID 保存于 `data/agent/<scope>/`。不自动将旧匿名 Cookie 的历史绑定到新账号。
 
@@ -35,7 +37,7 @@
 | `GET /api/users/{uid}/console/request-runs?offset=0` | 按对话分组分页，每页 50 轮，每组保留全部请求子菜单 |
 | `GET /api/users/{uid}/console/requests/{request_id}` | 管理员读取一次模型请求的完整正文 |
 
-聊天、设置和资源写入 API 必须登录；普通用户不能调用管理员 API。匿名请求返回 401，角色或 UID 不匹配返回 403。旧业务能力仍不转发到 legacy 后端。
+聊天、设置和资源写入 API 必须登录；普通用户不能调用管理员 API。匿名 API 请求返回 HTTP 401（`Unauthorized`）；未登录访问用户页面或 Console 时以 303 跳转 `/app/`。已打开页面的普通请求及流式连接收到 401 后清除身份缓存并回到登录页，登录接口的密码错误仍留在登录表单提示。角色或 UID 不匹配返回 403，不跳转登录。旧业务能力仍不转发到 legacy 后端。
 
 ## 完整 LLM 对话上下文
 

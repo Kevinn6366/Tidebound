@@ -41,7 +41,7 @@ def test_user_roles_and_console_boundaries(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     admin, user, anonymous = (TestClient(app) for _ in range(3))
     assert anonymous.get('/api/chat/session').status_code == 401
-    assert anonymous.get('/app/uid-00000001/console').status_code == 401
+    assert anonymous.get('/app/uid-00000001/console', follow_redirects=False).headers['location'] == '/app/'
     result = admin.post('/api/auth/setup', json=CREDENTIALS)
     assert result.status_code == 201
     assert result.json() == {"uid": "uid-00000001", "username": "admin", "role": "admin"}
@@ -231,3 +231,28 @@ def test_only_admin_can_reset_own_context(tmp_path: Path) -> None:
     assert len(other.get('/api/chat/session').json()['messages']) == 2
     assert len(app.state.chat.store.list_runs(scopes[0])) == 1
     assert admin.get('/api/chat/session').json()['messages'] == []
+
+
+def test_restart_redirects_pages_but_keeps_api_unauthorized(tmp_path: Path) -> None:
+    """重启使旧 Cookie 失效；页面回登录，API 保持 HTTP 401。
+
+    Args:
+        tmp_path: 隔离账号持久化与应用数据的目录。
+    """
+    original = TestClient(make_app(tmp_path))
+    original.post('/api/auth/setup', json=CREDENTIALS)
+    restarted = TestClient(make_app(tmp_path))
+    restarted.cookies.update(original.cookies)
+    for path in ['/app/uid-00000001', '/app/uid-00000001/console']:
+        response = restarted.get(path, follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers['location'] == '/app/'
+        assert response.headers['cache-control'] == 'no-store'
+        assert restarted.get(path).headers['content-type'].startswith('text/html')
+    for path in ['/api/auth/me', '/api/chat/session', '/api/users/uid-00000001/console/log']:
+        response = restarted.get(path)
+        assert response.status_code == 401
+        assert response.json() == {'detail': 'Unauthorized'}
+        assert response.headers['cache-control'] == 'no-store'
+    assert restarted.post('/api/auth/login', json=CREDENTIALS).status_code == 200
+    assert restarted.get('/app/uid-00000001').status_code == 200

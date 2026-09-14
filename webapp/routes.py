@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 
 from webapp.assets import list_model_assets, resolve_public_file
-from webapp.auth import require_owner
+from webapp.auth.dependencies import require_owner
 from webapp.config import WebSettings
 from webapp.schemas import CapabilitiesResponse, HealthResponse, LoginConfigResponse, ModelListResponse
 

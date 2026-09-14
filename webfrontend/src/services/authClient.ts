@@ -4,6 +4,23 @@ export interface AuthUser {
   role: 'user' | 'admin';
 }
 const USER_KEY = 'tidebound_user';
+let redirectingToLogin = false;
+
+/**
+ * 私有请求遇到 HTTP 401 时清理身份缓存并回到登录页。
+ * @param response - 普通业务接口或流式连接的响应，不用于登录凭据校验。
+ * @returns 非 401 响应保持原流程。
+ * @throws 会话失效时抛出 HTTP 401 错误，中止后续响应解析。
+ */
+export function requireSession(response: Response): void {
+  if (response.status !== 401) return;
+  sessionStorage.removeItem(USER_KEY);
+  if (!redirectingToLogin) {
+    redirectingToLogin = true;
+    window.location.replace('/app/');
+  }
+  throw new Error('HTTP 401 Unauthorized');
+}
 
 /**
  * 读取当前标签页已验证的身份缓存，仅用于界面展示。
@@ -65,7 +82,11 @@ export async function loadIdentity(): Promise<{ setup: boolean; user: AuthUser |
   if (typeof status !== 'object' || status === null || !('setup_required' in status)
     || typeof status.setup_required !== 'boolean') throw new Error('初始化状态格式非法');
   const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
-  if (response.status === 401) return { setup: status.setup_required, user: null };
+  if (response.status === 401) {
+    if (window.location.pathname.startsWith('/app/uid-')) requireSession(response);
+    if (window.location.hash) window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    return { setup: status.setup_required, user: null };
+  }
   if (!response.ok) throw new Error('无法读取登录状态');
   const user = parseUser(await response.json());
   sessionStorage.setItem(USER_KEY, JSON.stringify(user));

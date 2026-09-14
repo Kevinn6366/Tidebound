@@ -291,3 +291,7 @@ Prompt bundle 对应 `OPEN-10`，spec 治理与首个交付对应 `OPEN-11`。�
 ## 2026-09-14 Console 完整上下文修订
 
 管理员 console 提供“查看完整 LLM 对话上下文”和“查看日志”两个独立入口。模型适配器在发送前保存完整请求正文，按 Run 与调用次数关联，支持查看实际历史、一次性注入及工具声明。请求快照是独立审计资料，不进入有效聊天历史；此修订覆盖前文 console 仅查看日志的范围，具体存储与权限见 [账号与日志 Console](accounts-and-console.md)。
+
+## 2026-09-14 WebApp 鉴权目录修订
+
+账号认证、密码验证、登录会话和 HTTP 权限检查统一归 `webapp/auth/`，按服务、依赖、路由和中间件分文件。`backend/` 不承载鉴权实现，Agent 内核继续只接收已确认的账号归属。账号 MySQL 读写仍归存储层，具体职责见 [账号鉴权与日志 Console](accounts-and-console.md)。

@@ -1,7 +1,7 @@
 """隔离浏览器测试数据与本地开发服务。"""
-from backend.auth import Credentials
 from src.tidebound.config import AgentSettings
 from tests.support.account_store import FileUserStore
+from webapp.auth.service import Credentials
 from webapp.config import WebSettings
 from webapp.main import create_app
 

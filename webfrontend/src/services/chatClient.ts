@@ -1,4 +1,4 @@
-import { getSessionUser } from './authClient';
+import { getSessionUser, requireSession } from './authClient';
 
 export interface ChatMessageInput {
   run_id: string;
@@ -43,6 +43,7 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
   const user = getSessionUser();
   if (user) headers.set('X-Tidebound-Uid', user.uid);
   const response = await fetch(path, { ...init, headers, credentials: 'same-origin' });
+  requireSession(response);
   const data: unknown = await response.json();
   if (!response.ok) {
     if (typeof data === 'object' && data !== null && 'detail' in data) {
@@ -179,6 +180,7 @@ export async function streamChatRun(id: string, signal: AbortSignal, onUpdate: (
   const user = getSessionUser();
   if (user) headers.set('X-Tidebound-Uid', user.uid);
   const response = await fetch(`/api/chat/runs/${encodeURIComponent(id)}/events`, { headers, signal, credentials: 'same-origin' });
+  requireSession(response);
   if (!response.ok || !response.body) throw new Error(`流式连接失败（${response.status}）`);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

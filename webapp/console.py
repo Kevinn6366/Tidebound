@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query, Request
 
 from backend.console import ConsoleLog, read_debug_log
 from src.tidebound.storage.model_requests import ModelRequestStore, RequestRunSummary, RequestSnapshot, RequestSummary
-from webapp.auth import require_owner
+from webapp.auth.dependencies import require_owner
 
 router = APIRouter()
 

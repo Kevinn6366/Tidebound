@@ -6,7 +6,7 @@ from pydantic import JsonValue
 from starlette.datastructures import UploadFile
 
 from backend.ui_store import UiStore
-from webapp.auth import current_user
+from webapp.auth.dependencies import current_user
 
 router = APIRouter()
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024

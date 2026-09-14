@@ -252,3 +252,31 @@ test('管理员清空上下文后恢复初始状态且新请求不带旧历史',
   const snapshot = await (await page.request.get(`/api/users/uid-00000001/console/requests/${group.requests[0].request_id}`)).json();
   expect(snapshot.body.messages.map((message: { role: string }) => message.role)).toEqual(['system', 'user']);
 });
+
+for (const surface of ['聊天', 'Console']) {
+  test(`${surface} 会话失效收到 HTTP 401 后跳转登录`, async ({ page }) => {
+    if (surface === 'Console') {
+      await page.request.post('/api/auth/login', { data: { username: 'e2e-admin', password: 'test-admin-password' } });
+      await page.goto('/app/uid-00000001/console');
+      await page.getByRole('button', { name: '查看日志', exact: true }).click();
+    } else {
+      await page.goto('/app/');
+      await page.getByRole('button', { name: 'START', exact: true }).click();
+      await expect(page.getByPlaceholder(/输入/).first()).toBeEnabled();
+    }
+    const oldUrl = page.url();
+    const unauthorized = page.waitForResponse(response => response.status() === 401);
+    await page.request.post('/api/auth/logout');
+    await unauthorized;
+    await expect(page).toHaveURL(/\/app\/$/);
+    await expect(page.getByRole('heading', { name: '登录', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem('tidebound_user'))).toBeNull();
+    await page.goto(oldUrl);
+    await expect(page).toHaveURL(/\/app\/$/);
+    await page.getByLabel('用户名', { exact: true }).fill('e2e-admin');
+    await page.getByLabel('密码', { exact: true }).fill('wrong-password');
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.getByRole('alert')).toBeVisible();
+    await expect(page).toHaveURL(/\/app\/$/);
+  });
+}

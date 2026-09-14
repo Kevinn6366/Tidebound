@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from backend.chat import ChatMessageInput, RunView, SessionView, run_view, session_view, submit_message
-from webapp.auth import current_user, require_owner
+from webapp.auth.dependencies import current_user, require_owner
 
 router = APIRouter()
 

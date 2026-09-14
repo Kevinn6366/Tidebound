@@ -1,7 +1,7 @@
 [project]
 name = "tidebound"
-version = "0.0.1"
-description = "Tidebound v0.01 minimal atri agent loop"
+version = "0.0.2"
+description = "Tidebound v0.02 agent web application"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<1",
