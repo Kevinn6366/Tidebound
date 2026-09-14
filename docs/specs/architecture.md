@@ -198,6 +198,8 @@ bundle 的 manifest、版本标识、变量声明、共享规则引用、输出�
 
 ## 十七、项目结构与代码职责
 
+`legacy/gwcpro/` 保存从根目录 `gwcpro/` 整体迁入的上游参考代码，不作为新应用的启动或导入依赖。
+
 仓库保持前端、后端、提示词、规格和运行数据分离。根目录中的 `webfrontend/` 承接复用的 Web 前端，`src/` 承接新写的 Python 后端，`prompts/` 保存提示词内容，`docs/specs/` 保存当前有效技术规格，`docs/` 统一保存规格、讨论与说明，`tests/` 保存验证代码，`deploy/` 保存部署配置，`scripts/` 保存必要的开发辅助入口。运行期内容放在 `data/` 所代表的独立数据位置，不与版本化源码混放。
 
 根目录的 `README.md` 说明项目用途与实际可用的启动方式，`AGENTS.md` 为编码 Agent 提供简短的阅读顺序和开发约束，并指向 `docs/specs/architecture.md`。Python 项目配置与依赖在 `pyproject.toml` 中统一管理，环境示例使用 `.env.example` 表达，真实凭据和运行数据由 `.gitignore` 排除。具体依赖管理命令和工具版本应在实施时按实际选择补充，本规格不指定尚未讨论的软件版本。

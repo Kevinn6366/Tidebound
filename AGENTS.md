@@ -4,7 +4,7 @@
 
 先阅读 [宏观架构规格](docs/specs/architecture.md)，再阅读 `docs/specs/` 中与当前任务有关的专项规格。历史讨论保存在 `docs/architecture/discussions/`，以当前有效规格和用户最新确认的要求为准。
 
-- Web 前端放在 `webfrontend/`，FastAPI 通信层放在 `webapp/`，新的 Python 业务后端放在 `src/`；`gwcpro/` 保留尚未迁移的上游业务，禁止从新应用导入旧 Agent。对话应用接口空实现放在根目录 `backend/`，FastAPI 仍在 `webapp/`。
+- Web 前端放在 `webfrontend/`，FastAPI 通信层放在 `webapp/`，新的 Python 业务后端放在 `src/`；`legacy/gwcpro/` 保留尚未迁移的上游业务，禁止从新应用导入旧 Agent。对话应用接口空实现放在根目录 `backend/`，FastAPI 仍在 `webapp/`。
 - 展示与通信迁移状态、验收范围见 `docs/specs/web-migration.md`；`webfrontend/src/gwc/` 保留完整上游界面与设置，模型执行已移除；`webfrontend/legacy/` 是原始参考，不进入构建或静态发布。
 - FastAPI 负责通信适配；Agent 执行与会话协调归 `src/runtime/`，上下文、记忆、工作流、工具和存储按架构规格分别实现。
 - 提示词内容统一放在 `prompts/`；凭据与运行数据不进入版本控制。
