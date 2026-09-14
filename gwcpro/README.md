@@ -1,3 +1,5 @@
+> Tidebound 迁移说明（2026-09-14）：Web 前端现位于根目录 `webfrontend/`，新通信入口为 `webapp.main:app`。下文是上游原始说明；旧启动脚本不适用于 Tidebound 新环境。已迁移的展示路由在 backend/main.py 中注释，LLM 和其余业务未接入新服务。请使用 [当前启动说明](../README.md)。
+
 # GWC Pro — Full-Stack AI Character Engine / 全栈 AI 角色扮演引擎
 
 > 🎮 **Next-gen AI role-playing engine** — Live2D desktop pet + visual novel dialogue + RAG skill knowledge base + OpenCode agent + MMD 3D support.

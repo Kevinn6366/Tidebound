@@ -1,3 +1,4 @@
+# Tidebound：展示通信入口迁至 webapp；旧 LLM 与其余业务仅保留参考，不由新应用导入。
 import sys
 import os
 import json
@@ -509,16 +510,17 @@ def get_path(folder_name):
 MODELS_DIR = get_path("live2d_models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-@app.get("/api/models")
-async def scan_local_models():
-    result = []
-    for root, _, files in os.walk(MODELS_DIR):
-        for file in files:
-            if file.endswith((".model3.json", ".model.json")):
-                rel_path = os.path.relpath(os.path.join(root, file), MODELS_DIR).replace('\\', '/')
-                encoded_path = '/'.join(quote(seg, safe='') for seg in rel_path.split('/'))
-                result.append({"name": os.path.basename(os.path.dirname(os.path.join(root, file))), "path": f"http://127.0.0.1:5201/models/{encoded_path}"})
-    return {"models": result}
+# Tidebound 迁移标注：该展示入口已退出旧应用；见 webapp/routes.py。
+# @app.get("/api/models")
+# async def scan_local_models():
+#     result = []
+#     for root, _, files in os.walk(MODELS_DIR):
+#         for file in files:
+#             if file.endswith((".model3.json", ".model.json")):
+#                 rel_path = os.path.relpath(os.path.join(root, file), MODELS_DIR).replace('\\', '/')
+#                 encoded_path = '/'.join(quote(seg, safe='') for seg in rel_path.split('/'))
+#                 result.append({"name": os.path.basename(os.path.dirname(os.path.join(root, file))), "path": f"http://127.0.0.1:5201/models/{encoded_path}"})
+#     return {"models": result}
 
 # ==========================================
 # MMD 3D 模型扫描（每个含 .pmx/.pmd 的文件夹算一个模型；同/子目录的 .vmd 作为可选动作）
@@ -2367,14 +2369,16 @@ async def clone_user_data(source_id: str, target_id: str):
     return {"ok": True, "msg": f"已将 {src} 数据克隆至 {tgt}"}
 
 
-@app.get("/admin")
-async def serve_admin_ui():
-    target = os.path.join(STATIC_DIR, "admin.html")
-    if os.path.exists(target): return FileResponse(target)
-    return {"detail": "Admin panel not found."}
+# Tidebound 迁移标注：该展示入口已退出旧应用；见 webapp/routes.py。
+# @app.get("/admin")
+# async def serve_admin_ui():
+#     target = os.path.join(STATIC_DIR, "admin.html")
+#     if os.path.exists(target): return FileResponse(target)
+#     return {"detail": "Admin panel not found."}
 
 
-app.mount("/models", StaticFiles(directory=MODELS_DIR), name="models")
+# Tidebound：/models 改由 webapp 提供，只读取 data/assets/live2d_models。
+# app.mount("/models", StaticFiles(directory=MODELS_DIR), name="models")
 app.mount("/mmd_models", StaticFiles(directory=MMD_MODELS_DIR), name="mmd_models")
 
 # ==========================================
@@ -3113,21 +3117,24 @@ async def web_search(q: str = "", source: str = "ddg"):
 
     return {"results": results}
 
-@app.get("/app")
-async def redirect_frontend():
-    """重定向 /app → /app/，确保相对路径正确解析"""
-    return RedirectResponse(url="/app/")
+# Tidebound 迁移标注：该展示入口已退出旧应用；见 webapp/routes.py。
+# @app.get("/app")
+# async def redirect_frontend():
+#     """重定向 /app → /app/，确保相对路径正确解析"""
+#     return RedirectResponse(url="/app/")
 
-@app.get("/app/{path:path}")
-async def serve_frontend_path(path: str):
-    file_path = os.path.join(FRONTEND_DIST, path)
-    if os.path.isfile(file_path): return FileResponse(file_path)
-    idx = os.path.join(FRONTEND_DIST, "index.html")
-    if os.path.exists(idx): return FileResponse(idx)
-    return {"detail": "Frontend not built. Run: npm run build"}
+# Tidebound 迁移标注：该展示入口已退出旧应用；见 webapp/routes.py。
+# @app.get("/app/{path:path}")
+# async def serve_frontend_path(path: str):
+#     file_path = os.path.join(FRONTEND_DIST, path)
+#     if os.path.isfile(file_path): return FileResponse(file_path)
+#     idx = os.path.join(FRONTEND_DIST, "index.html")
+#     if os.path.exists(idx): return FileResponse(idx)
+#     return {"detail": "Frontend not built. Run: npm run build"}
 
-if os.path.exists(STATIC_DIR):
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# Tidebound：旧 HTML 页面已迁至 webfrontend/legacy/web_static，不再注册旧静态入口。
+# if os.path.exists(STATIC_DIR):
+#     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 if __name__ == "__main__":
     # 自动初始化默认 Admin 账号（首次启动）

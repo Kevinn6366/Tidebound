@@ -1,0 +1,22 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Runtime data is not versioned; keep its root directory in Git.
+/data/*
+!/data/.gitkeep
+
+# Development artifacts
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+dist/
+
+# Browser test artifacts
+/webfrontend/test-results/
+/webfrontend/playwright-report/
