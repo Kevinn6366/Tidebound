@@ -1,0 +1,10 @@
+# 整个 prompts 目录是 atri 的提示词集合，替换内容时整体替换此目录。
+# 模型与凭据由服务端配置；此处只管理提示词包。
+prompts:
+  chat.character:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: chat.character-zh
+          segments:
+            - content: "@master/chat.character/chat.character-zh.md"

@@ -16,8 +16,9 @@ def get_health() -> HealthResponse:
 
 
 @router.get("/api/capabilities")
-def get_capabilities() -> CapabilitiesResponse:
-    return CapabilitiesResponse()
+def get_capabilities(request: Request) -> CapabilitiesResponse:
+    """报告模型配置就绪状态与首版固定能力。"""
+    return CapabilitiesResponse(chat=request.app.state.chat.configured)
 
 
 @router.get("/api/login-config")

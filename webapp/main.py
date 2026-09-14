@@ -1,28 +1,51 @@
 """使用 python -m uvicorn webapp.main:app 启动独立通信层。"""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse, Response
 
+from src.config import AgentSettings
+from src.errors import AgentError
+from src.llm import ModelClient
+from src.runtime.session import ChatSession
 from webapp.chat import router as chat_router
 from webapp.config import WebSettings
 from webapp.routes import router
 from webapp.ui_routes import router as ui_router
 
 
-def create_app(settings: WebSettings | None = None) -> FastAPI:
-    """组装仅供展示迁移验收使用的 FastAPI 应用。
+def create_app(settings: WebSettings | None = None, agent_settings: AgentSettings | None = None,
+               model: ModelClient | None = None) -> FastAPI:
+    """组装固定 atri 的本地开发应用。
 
     Args:
         settings: 可注入的静态资源路径，省略时使用仓库默认目录。
+        agent_settings: 模型、提示词和运行数据配置，省略时读取环境。
+        model: 受控测试可注入的模型边界。
 
     Returns:
-        不加载旧模型后端；设置资源按浏览器隔离的开发预览应用。
+        不加载旧模型后端，使用独立 Python 循环的应用。
     """
-    application = FastAPI(title="Tidebound WebApp", version="0.1.0")
+    chat = ChatSession(agent_settings or AgentSettings.from_env(), model)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        """等待后台执行正常停止后关闭应用。"""
+        yield
+        await chat.close()
+
+    application = FastAPI(title="Tidebound WebApp", version="0.0.1", lifespan=lifespan)
+    application.state.chat = chat
     application.state.settings = settings or WebSettings()
+
+    @application.exception_handler(AgentError)
+    async def agent_error(_: Request, error: AgentError) -> JSONResponse:
+        """将可公开的业务错误转换为通信错误。"""
+        return JSONResponse({"detail": {"code": error.code, "message": str(error)}}, status_code=error.status)
+
     @application.middleware('http')
     async def preview_identity(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         """为开发预览资源分配浏览器范围，拒绝跨来源写操作。

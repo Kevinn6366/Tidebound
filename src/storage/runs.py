@@ -1,0 +1,53 @@
+"""单 worker dev 的原子 JSON 执行记录，完成记录即已提交历史。"""
+import os
+from pathlib import Path
+from uuid import UUID, uuid4
+
+from src.runtime.types import RunRecord
+
+
+class RunStore:
+    """按开发会话范围隔离的文件存储。"""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def save(self, owner: str, record: RunRecord) -> None:
+        """将完成标记与消息一起原子写入。
+
+        Args:
+            owner: 经通信层确定的开发范围。
+            record: 需要可靠保存的执行记录。
+
+        Raises:
+            OSError: 写入失败，调用方不可宣称提交成功。
+        """
+        directory = self.root / UUID(owner).hex
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{UUID(record.run_id).hex}.json"
+        temporary = directory / f".{uuid4().hex}.tmp"
+        try:
+            with temporary.open("x", encoding="utf-8") as output:
+                output.write(record.model_dump_json())
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def list_runs(self, owner: str) -> list[RunRecord]:
+        """按创建时间读取一个范围的执行记录。
+
+        Args:
+            owner: 当前开发会话范围。
+
+        Returns:
+            有序执行列表，包含失败记录。
+
+        Raises:
+            OSError: 无法读取文件。
+            ValueError: 标识或记录损坏。
+        """
+        records = [RunRecord.model_validate_json(path.read_text(encoding="utf-8"))
+                   for path in (self.root / UUID(owner).hex).glob("*.json")]
+        return sorted(records, key=lambda record: (record.created_at, record.run_id))

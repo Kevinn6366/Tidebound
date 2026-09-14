@@ -1,11 +1,15 @@
-"""对话应用接口的空实现，与 FastAPI 无关。"""
+"""对话应用边界：输入校验与视图转换，执行归 src/runtime。"""
+from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from src.errors import AgentError
+from src.runtime.session import ChatSession
+from src.runtime.types import RunRecord
 
 
 class ChatAttachment(BaseModel):
-    """原对话框提交的附件，不在空实现中解析或存储。"""
-
     model_config = ConfigDict(extra="forbid")
     type: str
     name: str
@@ -13,24 +17,116 @@ class ChatAttachment(BaseModel):
 
 
 class ChatMessageInput(BaseModel):
-    """对话通信输入，不接受客户端拼装的历史、提示词或模型凭据。"""
-
     model_config = ConfigDict(extra="forbid")
-    content: str = Field(min_length=1, max_length=100_000)
+    run_id: UUID
+    content: str = Field(min_length=1, max_length=24000)
     attachments: list[ChatAttachment] = Field(default_factory=list, max_length=20)
 
+    @field_validator("content")
+    @classmethod
+    def require_text(cls, value: str) -> str:
+        """拒绝空白正文并规范首尾空格。"""
+        if not value.strip():
+            raise ValueError("正文不能为空")
+        return value.strip()
 
-class ChatNotConnectedError(Exception):
-    """对话执行尚未实现，不能伪造模型回复。"""
+
+class ToolResultView(BaseModel):
+    call_id: str
+    name: str
+    arguments: str
+    result: str | None
 
 
-def submit_message(message: ChatMessageInput) -> None:
-    """保留对话后端调用入口，等待后续接入新的 runtime。
+class RunView(BaseModel):
+    run_id: str
+    status: str
+    tools: list[ToolResultView] = Field(default_factory=list)
+    reply: str | None = None
+    error_code: str | None = None
+    error: str | None = None
+
+
+class DisplayMessage(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class SessionView(BaseModel):
+    character: Literal["atri"] = "atri"
+    character_name: Literal["亚托莉"] = "亚托莉"
+    messages: list[DisplayMessage]
+    active_run: RunView | None
+    tool_runs: list[RunView]
+
+
+def run_view(record: RunRecord) -> RunView:
+    """把最终回复、工具记录与安全失败信息交给浏览器。
 
     Args:
-        message: 已校验的用户正文与附件；当前不执行、不保存。
+        record: 持久化执行记录。
+
+    Returns:
+        不含系统提示词、模型配置或凭据的执行视图。
+    """
+    reply = record.messages[-1].content if record.status == "completed" else None
+    tool_views: list[ToolResultView] = []
+    pending: dict[str, ToolResultView] = {}
+    for message in record.messages:
+        if message.role == "assistant":
+            pending = {}
+            for call in message.tool_calls:
+                view = ToolResultView(call_id=call.id, name=call.name, arguments=call.arguments, result=None)
+                pending[call.id] = view
+                tool_views.append(view)
+        elif message.role == "tool" and message.tool_call_id in pending:
+            pending[message.tool_call_id].result = message.content
+    return RunView(run_id=record.run_id, status=record.status, reply=reply, tools=tool_views,
+                   error_code=record.error_code, error=record.error)
+
+
+def submit_message(service: ChatSession, owner: str, message: ChatMessageInput) -> RunView:
+    """校验首版能力后启动指定归属的执行。
+
+    Args:
+        service: 应用组装的会话服务。
+        owner: 当前开发范围。
+        message: 正文、执行标识和待检查的附件。
+
+    Returns:
+        新建或重复执行的状态。
 
     Raises:
-        ChatNotConnectedError: 当前始终抛出，表示尚无对话业务实现。
+        AgentError: 附件未支持、配置缺失或并发冲突。
     """
-    raise ChatNotConnectedError("对话接口已连接，后端逻辑尚未接入；输入与附件已保留。")
+    if message.attachments:
+        raise AgentError("attachments_not_supported", "v0.01 暂时只支持文字；附件和草稿已保留。", 422)
+    return run_view(service.start(owner, str(message.run_id), message.content))
+
+
+def session_view(service: ChatSession, owner: str) -> SessionView:
+    """从已提交记录构建固定 atri 会话的展示历史。
+
+    Args:
+        service: 当前会话服务。
+        owner: 归属范围。
+
+    Returns:
+        仅完成轮次的用户与最终回复，以及当前执行状态。
+    """
+    messages: list[DisplayMessage] = []
+    active = None
+    tool_runs: list[RunView] = []
+    for record in service.records(owner):
+        view = run_view(record)
+        if view.tools:
+            tool_runs.append(view)
+        if record.status == "running":
+            active = run_view(record)
+        if record.status == "completed":
+            messages.extend([
+                DisplayMessage(id=f"{record.run_id}:user", role="user", content=record.user_content),
+                DisplayMessage(id=f"{record.run_id}:assistant", role="assistant", content=record.messages[-1].content),
+            ])
+    return SessionView(messages=messages, active_run=active, tool_runs=tool_runs)

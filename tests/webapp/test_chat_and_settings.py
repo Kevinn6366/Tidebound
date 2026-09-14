@@ -1,9 +1,11 @@
 """验证恢复的对话空接口及浏览器隔离的设置、资源保存。"""
 
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from src.config import AgentSettings
 from webapp.config import WebSettings
 from webapp.main import create_app
 
@@ -17,7 +19,7 @@ def make_client(root: Path) -> TestClient:
     Returns:
         带独立 Cookie 容器的客户端。
     """
-    return TestClient(create_app(WebSettings(ui_data_dir=root)))
+    return TestClient(create_app(WebSettings(ui_data_dir=root), AgentSettings(data_dir=root / "agent")))
 
 
 def test_chat_stub_does_not_store_or_generate(tmp_path: Path) -> None:
@@ -27,9 +29,9 @@ def test_chat_stub_does_not_store_or_generate(tmp_path: Path) -> None:
         tmp_path: 隔离的测试目录。
     """
     client = make_client(tmp_path)
-    response = client.post('/api/chat/messages', json={'content': '你好', 'attachments': []})
-    assert response.status_code == 501
-    assert response.json()['detail']['code'] == 'chat_not_connected'
+    response = client.post('/api/chat/messages', json={'run_id': str(uuid4()), 'content': '你好', 'attachments': []})
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'model_not_configured'
     assert list(tmp_path.iterdir()) == []
     assert client.post('/api/chat/messages', json={'content': ''}).status_code == 422
     assert client.post('/api/chat/messages', json={'content': 'test', 'api_key': 'fake'}).status_code == 422

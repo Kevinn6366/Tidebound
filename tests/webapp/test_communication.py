@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from src.config import AgentSettings
 from webapp.config import WebSettings
 from webapp.main import create_app
 
@@ -26,7 +27,7 @@ def client(tmp_path: Path) -> TestClient:
     models = tmp_path / "models" / "亚托莉 示例"
     models.mkdir(parents=True)
     (models / "atri.model3.json").write_text('{"Version": 3}', encoding="utf-8")
-    return TestClient(create_app(WebSettings(frontend_dist=dist, models_dir=models.parent, ui_data_dir=tmp_path / 'ui')))
+    return TestClient(create_app(WebSettings(frontend_dist=dist, models_dir=models.parent, ui_data_dir=tmp_path / 'ui'), AgentSettings(data_dir=tmp_path / 'agent')))
 
 
 def test_bootstrap_contract(client: TestClient) -> None:
@@ -37,8 +38,8 @@ def test_bootstrap_contract(client: TestClient) -> None:
     """
     assert client.get("/api/health").json() == {"status": "ok", "service": "tidebound-webapp"}
     assert client.get("/api/capabilities").json() == {
-        "mode": "ui-preview", "chat_interface": True, "settings": True,
-        "chat": False, "authentication": False, "history": False, "live2d": True,
+        "mode": "agent-dev", "character": "atri", "tools": ["get_current_time"], "chat_interface": True, "settings": True,
+        "chat": False, "authentication": False, "history": True, "live2d": True,
     }
     assert client.get("/api/login-config").json()["loginPageTitle"] == "汐伴 · Tidebound"
 

@@ -11,12 +11,14 @@ class HealthResponse(BaseModel):
 
 
 class CapabilitiesResponse(BaseModel):
-    mode: Literal["ui-preview"] = "ui-preview"
+    mode: Literal["agent-dev"] = "agent-dev"
     chat_interface: Literal[True] = True
     settings: Literal[True] = True
-    chat: Literal[False] = False
+    chat: bool = False
     authentication: Literal[False] = False
-    history: Literal[False] = False
+    history: Literal[True] = True
+    character: Literal["atri"] = "atri"
+    tools: list[str] = ["get_current_time"]
     live2d: Literal[True] = True
 
 

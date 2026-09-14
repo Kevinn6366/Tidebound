@@ -1,6 +1,6 @@
-import { submitChatMessage } from '../services/chatClient';
+import { useAgentChat } from '../hooks/useAgentChat';
 import { frontendFetch as fetch } from '../services/frontendFetch';
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Settings, MessageSquare, Plus, Trash2, Send,
   RefreshCw, Volume2, VolumeX, Menu, X, Save,
@@ -204,9 +204,9 @@ import {
 // --- 默认设置 ---
 const DEFAULT_SETTINGS = {
   openaiBaseUrl: '', openaiApiKey: '', aiModel: 'gpt-3.5-turbo', aiTemperature: 0.7, apiProfiles: [],
-  customSystemPrompt: '你是一个可爱的虚拟助手，请用简短、生动、带有一点二次元风格的语言回答我的问题。',
+  customSystemPrompt: '',
   worldviewText: '', worldviewProfiles: [],
-  userName: '我', aiName: '对象', characterList: [], activeSkillPacks: [], activeKbPacks: [], enableSkills: true, ttsEnabled: false,
+  userName: '我', aiName: '亚托莉', characterList: [], activeSkillPacks: [], activeKbPacks: [], enableSkills: true, ttsEnabled: false,
   ttsUrlTemplate: 'http://127.0.0.1:9880/tts?text={text}&text_lang={lang}&ref_audio_path={ref_audio}&prompt_text={ref_text}&prompt_lang={ref_lang}',
   ttsLanguage: 'zh', ttsVolume: 1.0, bgmVolume: 0.3, bgmMode: 'sequential', enableBgmToast: false,
   // ✨ 新增手机端模式开关状态与缩放比例
@@ -329,12 +329,13 @@ const TypewriterPreview = ({ speed, text, textStyle }) => {
 
 
 /**
- * 组装原有对话框、设置与资源管理界面，模型执行已替换为 backend 空接口。
+ * 组装原有对话框、设置与资源管理界面，主对话接入 Python Agent loop。
  * @param {{router: {currentPage: string, navigate: (path: string) => void}}} props - 页面路由。
  * @returns {import('react').ReactElement} 原有完整界面。
  */
 export default function AppCore({ router }) {
   const { currentPage, navigate } = router;
+  const agentChat = useAgentChat();
   const [appMode, setAppMode] = useState(currentPage === '/chat' ? 'game' : 'title');
   const [localTitleBgImage, setLocalTitleBgImage] = useState('');
 
@@ -427,7 +428,7 @@ export default function AppCore({ router }) {
             if (s.currentModelId === undefined) s.currentModelId = null;
             if (s.dialogLineHeight === undefined) s.dialogLineHeight = 1.8;
             s.enableBridge = false; // 强制开启桥接，确保桌宠通讯正常
-            setSettings({ ...DEFAULT_SETTINGS, ...s });
+            setSettings({ ...DEFAULT_SETTINGS, ...s, aiName: '亚托莉' });
         }
         if (se && se.length > 0) {
           setSessions(se);
@@ -512,7 +513,7 @@ export default function AppCore({ router }) {
   const canWrite = () => initialLoadDoneRef.current && loadOkRef.current;
   useEffect(() => { if (!isCoreLoading) initialLoadDoneRef.current = true; }, [isCoreLoading]);
   useEffect(() => { if (canWrite()) saveCoreData('live2d_settings_v35', settings).catch(error => showToast(`保存失败：${error.message}`, 'error')); }, [settings]);
-  useEffect(() => { if (canWrite()) saveCoreData('live2d_sessions_v35', sessions).catch(error => showToast(`保存失败：${error.message}`, 'error')); }, [sessions]);
+  // 服务端执行记录是对话历史来源，不再向旧 UI 存储回写聊天。
   useEffect(() => { if (canWrite()) saveCoreData('live2d_saves_v35', saveSlots).catch(error => showToast(`保存失败：${error.message}`, 'error')); }, [saveSlots]);
   useEffect(() => { if (canWrite()) saveCoreData('live2d_quicksave_v35', quickSaveData).catch(error => showToast(`保存失败：${error.message}`, 'error')); }, [quickSaveData]);
   useEffect(() => { if (canWrite()) saveCoreData('live2d_autosave_v35', autoSaveData).catch(error => showToast(`保存失败：${error.message}`, 'error')); }, [autoSaveData]);
@@ -524,7 +525,7 @@ export default function AppCore({ router }) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(currentPage === '/settings');
   const [settingsTab, setSettingsTab] = useState('visual'); 
   const [isLogOpen, setIsLogOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const isLoading = agentChat.busy || !agentChat.ready;
   const [ocTaskId, setOcTaskId] = useState(null);
   const [ocVisible, setOcVisible] = useState(true);
   const isLoadingRef = useRef(false); // ✨ 新增：底层并发锁，防止重复触发请求导致闪烁
@@ -1337,7 +1338,7 @@ export default function AppCore({ router }) {
 
   const saveCurrentAsCharCard = () => {
     const newCard = { id: Date.now().toString(), userName: settings.userName, aiName: settings.aiName, prompt: settings.customSystemPrompt, skillPacks: settings.activeSkillPacks || [], kbPacks: settings.activeKbPacks || [] };
-    setSettings(prev => ({ ...prev, characterList: [...(prev.characterList || []), newCard] })); showToast(`已将【${settings.aiName}】存入角色卡库`, "success");
+    setSettings(prev => ({ ...prev, characterList: [...(prev.characterList || []), newCard] })); showToast(`已将【${'亚托莉'}】存入角色卡库`, "success");
   };
 
   const exportCharCard = (card) => {
@@ -1412,7 +1413,7 @@ export default function AppCore({ router }) {
     if (activeSession?.messages?.length > 0) {
       let targetId = 1; while (saveSlots[targetId] && targetId <= 100) targetId++;
       if (targetId <= 100) {
-        const newSave = { id: targetId, title: `[${settings.aiName}] 自动存档`, date: new Date().toLocaleString(), messages: activeSession.messages || [] };
+        const newSave = { id: targetId, title: `[${'亚托莉'}] 自动存档`, date: new Date().toLocaleString(), messages: activeSession.messages || [] };
         setSaveSlots(prev => ({ ...prev, [targetId]: newSave })); showToast(`前段对话已自动存至 No.${String(targetId).padStart(3, '0')}`, 'info');
       }
     }
@@ -2045,7 +2046,7 @@ export default function AppCore({ router }) {
 
   const currentBgItem = bgList.find(b => b.id === settings.currentBgId);
   const activeBgUrl = appMode === 'title' ? (localTitleBgImage || '/app/bg.png') : (currentBgItem ? (currentBgItem.url || currentBgItem.dataUrl || '/app/bg.png') : '/app/bg.png');
-  const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
+  const activeSession = useMemo(() => ({ id: 'atri', title: '与亚托莉的对话', messages: agentChat.session.messages }), [agentChat.session.messages]);
   const latestMessage = activeSession?.messages?.[activeSession.messages.length - 1];
 
   const triggerShortcut = (id, defaultAction, e) => {
@@ -2070,7 +2071,7 @@ export default function AppCore({ router }) {
   useEffect(() => {
     if (!settings.enableAutoSave || appMode !== 'game' || !activeSession || activeSession.messages.length === 0) return;
     const intervalId = setInterval(() => {
-      const data = { date: new Date().toLocaleString(), messages: activeSession.messages.filter(m => !m.isError), title: `[${settings.aiName}] 自动存档 (Auto Save)` };
+      const data = { date: new Date().toLocaleString(), messages: activeSession.messages.filter(m => !m.isError), title: `[${'亚托莉'}] 自动存档 (Auto Save)` };
       setAutoSaveData(data); showToast('🔄 已自动保存游戏进度至 AUTO 槽位', 'info', 2000);
     }, settings.autoSaveInterval * 60 * 1000);
     return () => clearInterval(intervalId);
@@ -2086,40 +2087,33 @@ export default function AppCore({ router }) {
   const handleAutoSaveSButton = () => {
     let targetId = 1; while (saveSlots[targetId] && targetId <= 100) targetId++;
     if (targetId > 100) { showToast('存档已满，请手动覆盖历史存档。', 'error'); setSlMode('save'); setIsSaveLoadUIOpen(true); return; }
-    let defaultTitle = `[${settings.aiName}] 存档`; const newSave = { id: targetId, title: defaultTitle, date: new Date().toLocaleString(), messages: activeSession.messages || [] };
+    let defaultTitle = `[${'亚托莉'}] 存档`; const newSave = { id: targetId, title: defaultTitle, date: new Date().toLocaleString(), messages: activeSession.messages || [] };
     setSaveSlots(prev => ({ ...prev, [targetId]: newSave })); setSlPage(Math.ceil(targetId / 10)); setSlMode('save'); setIsSaveLoadUIOpen(true); setEditingSlotId(targetId); setEditSaveName(defaultTitle);
   };
 
-  const handleQuickSave = () => { const data = { date: new Date().toLocaleString(), messages: (activeSession?.messages || []).filter(m => !m.isError), title: `[${settings.aiName}] 快捷系统存档 (Quick Save)` }; setQuickSaveData(data); showToast('✨ 已完成快捷保存 (Quick Save)', 'success'); };
+  const handleQuickSave = () => { const data = { date: new Date().toLocaleString(), messages: (activeSession?.messages || []).filter(m => !m.isError), title: `[${'亚托莉'}] 快捷系统存档 (Quick Save)` }; setQuickSaveData(data); showToast('✨ 已完成快捷保存 (Quick Save)', 'success'); };
 
-  const handleQuickLoad = () => {
-    if (!quickSaveData) { showToast('当前没有快捷存档数据！', 'error'); return; }
-    setConfirmDialog({ isOpen: true, text: '确定要读取快捷存档吗？\n当前未保存的对话进度将会丢失！', onConfirm: () => { updateSessionMessages(activeSessionId, quickSaveData.messages, '读取的剧情'); setConfirmDialog({ isOpen: false, text: '', onConfirm: null }); setIsSaveLoadUIOpen(false); setAppMode('game'); showToast('已成功加载快捷存档', 'success'); } });
-  };
-
-  const handleAutoLoad = () => {
-    if (!autoSaveData) { showToast('当前没有自动存档数据！', 'error'); return; }
-    setConfirmDialog({ isOpen: true, text: '确定要读取自动存档吗？\n当前未保存的对话进度将会丢失！', onConfirm: () => { updateSessionMessages(activeSessionId, autoSaveData.messages, '读取的剧情'); setConfirmDialog({ isOpen: false, text: '', onConfirm: null }); setIsSaveLoadUIOpen(false); setAppMode('game'); showToast('已成功恢复自动存档进度', 'success'); } });
-  };
+  // 首版不允许 UI 存档改变服务端活动时间线。
+  const handleQuickLoad = () => showToast('历史回退尚未开放，对话由服务端持续保存。', 'info');
+  const handleAutoLoad = handleQuickLoad;
 
   const handleSlotClick = (slotId) => {
+    if (slMode === 'load') { handleQuickLoad(); return; }
     if (editingSlotId === slotId) return; 
     if (slMode === 'save') {
-      let defaultTitle = `[${settings.aiName}] 存档`;
+      let defaultTitle = `[${'亚托莉'}] 存档`;
       if (saveSlots[slotId]) {
         setConfirmDialog({ isOpen: true, text: `确定要覆盖 No.${String(slotId).padStart(3, '0')} 存档吗？`, onConfirm: () => { const newSave = { id: slotId, title: defaultTitle, date: new Date().toLocaleString(), messages: (activeSession.messages || []).filter(m => !m.isError) }; setSaveSlots(prev => ({ ...prev, [slotId]: newSave })); setConfirmDialog({ isOpen: false, text: '', onConfirm: null }); setEditingSlotId(slotId); setEditSaveName(defaultTitle); } });
       } else {
         const newSave = { id: slotId, title: defaultTitle, date: new Date().toLocaleString(), messages: (activeSession.messages || []).filter(m => !m.isError) }; setSaveSlots(prev => ({ ...prev, [slotId]: newSave })); setEditingSlotId(slotId); setEditSaveName(defaultTitle);
       }
-    } else {
-      const data = saveSlots[slotId]; if (!data) return; 
-      setConfirmDialog({ isOpen: true, text: `确定要读取 No.${String(slotId).padStart(3, '0')} 的进度吗？\n当前未保存的对话将会丢失！`, onConfirm: () => { updateSessionMessages(activeSessionId, data.messages, data.title); setConfirmDialog({ isOpen: false, text: '', onConfirm: null }); setIsSaveLoadUIOpen(false); setAppMode('game'); showToast('已成功加载进度', 'success'); } });
+
     }
   };
 
-  const handleSaveNameConfirm = () => { if (editingSlotId !== null && saveSlots[editingSlotId]) { setSaveSlots(prev => ({ ...prev, [editingSlotId]: { ...prev[editingSlotId], title: editSaveName.trim() || `[${settings.aiName}] 存档` } })); } setEditingSlotId(null); };
+  const handleSaveNameConfirm = () => { if (editingSlotId !== null && saveSlots[editingSlotId]) { setSaveSlots(prev => ({ ...prev, [editingSlotId]: { ...prev[editingSlotId], title: editSaveName.trim() || `[${'亚托莉'}] 存档` } })); } setEditingSlotId(null); };
   // 供 SaveLoadPage 使用：直接以传入的名称重命名指定档位（该页使用非受控输入框）
-  const handleRenameSlotByValue = (slotId, name) => { if (slotId != null && saveSlots[slotId]) { setSaveSlots(prev => ({ ...prev, [slotId]: { ...prev[slotId], title: (name || '').trim() || `[${settings.aiName}] 存档` } })); } setEditingSlotId(null); };
+  const handleRenameSlotByValue = (slotId, name) => { if (slotId != null && saveSlots[slotId]) { setSaveSlots(prev => ({ ...prev, [slotId]: { ...prev[slotId], title: (name || '').trim() || `[${'亚托莉'}] 存档` } })); } setEditingSlotId(null); };
 
   useEffect(() => { if (editingSlotId && editInputRef.current) { editInputRef.current.focus(); editInputRef.current.select(); } }, [editingSlotId]);
 
@@ -2428,7 +2422,7 @@ export default function AppCore({ router }) {
     showToast("正在切换模型...", "info");
   };
   const removeModel = async (id) => { await deleteMultiModelFromDB(id); const updated = modelsList.filter(m => m.id !== id); setModelsList(updated); if (settings.currentModelId === id) { setSettings(s => ({...s, currentModelId: updated.length > 0 ? updated[0].id : null})); setModelReloadTrigger(prev => prev + 1); } };
-  const createNewSession = () => { const newSession = { id: Date.now().toString(), title: '新剧情', messages: [], memorySummary: '' }; setSessions(prev => [newSession, ...prev]); setActiveSessionId(newSession.id); };
+  const createNewSession = () => { showToast('当前只有与亚托莉的持续对话。', 'info'); };
   const deleteSession = (e, id) => { e.stopPropagation(); const updated = sessions.filter(s => s.id !== id); setSessions(updated); if (activeSessionId === id) setActiveSessionId(updated.length > 0 ? updated[0].id : null); if (updated.length === 0) createNewSession(); };
   const renameSession = (id, newTitle) => { setSessions(prev => prev.map(s => s.id === id ? { ...s, title: newTitle } : s)); };
 
@@ -2527,7 +2521,7 @@ export default function AppCore({ router }) {
   };
 
   /**
-   * 将原对话框输入交给新后端接口；失败时保留草稿和附件，不写入虚假回复。
+   * 将输入交给服务端执行；只呈现已提交结果，停止或失败保留草稿和附件。
    * @param {string|null} overrideText - 快捷回复提供的正文，空值时读取输入框。
    * @returns {Promise<void>} 请求结束后恢复发送按钮状态。
    */
@@ -2535,14 +2529,17 @@ export default function AppCore({ router }) {
     const text = overrideText ?? inputValue.trim();
     if ((!text && selectedFiles.length === 0) || isLoadingRef.current) return;
     isLoadingRef.current = true;
-    setIsLoading(true);
+
     try {
-      await submitChatMessage({ content: text || '请查看附件', attachments: selectedFiles });
+      await agentChat.send({ content: text || '请查看附件', attachments: selectedFiles });
+      setInputValue('');
+      setSelectedFiles([]);
+      setVnPage(0);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '发送失败', 'error', 6000);
     } finally {
       isLoadingRef.current = false;
-      setIsLoading(false);
+
     }
   };
   const handleSendMessage = () => triggerSendMessage();
@@ -2666,19 +2663,7 @@ export default function AppCore({ router }) {
 
   const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } };
 
-  const handleStartGame = () => { 
-    if (autoSaveData && autoSaveData.messages && autoSaveData.messages.length > 0) {
-      setConfirmDialog({
-        isOpen: true, text: '检测到存在【自动存档】记录！\n开始新剧情将会覆盖该记录。\n是否需要将其迁移至常规存档位进行备份？', confirmText: '迁移备份并开始', cancelText: '取消',
-        thirdButton: { text: '直接覆盖开始', onClick: () => { setConfirmDialog({ isOpen: false, text: '', onConfirm: null }); createNewSession(); setAppMode('game'); } },
-        onConfirm: () => {
-          let targetId = 1; while (saveSlots[targetId] && targetId <= 100) targetId++;
-          if (targetId <= 100) { const newSave = { id: targetId, title: `[${settings.aiName}自动保存迁移]`, date: autoSaveData.date || new Date().toLocaleString(), messages: autoSaveData.messages }; setSaveSlots(prev => ({ ...prev, [targetId]: newSave })); showToast(`已成功迁移至 No.${String(targetId).padStart(3, '0')} 存档`, 'success'); } else { showToast('常规存档位已满，备份失败！将直接开始新剧情。', 'error'); }
-          setConfirmDialog({ isOpen: false, text: '', onConfirm: null }); createNewSession(); setAppMode('game');
-        }
-      });
-    } else { createNewSession(); setAppMode('game'); }
-  };
+  const handleStartGame = () => { setAppMode('game'); };
 
   const handleContinueGame = () => { setAppMode('game'); };
 
@@ -2769,7 +2754,7 @@ export default function AppCore({ router }) {
     // UI 状态
     isSettingsOpen, setIsSettingsOpen, settingsTab, setSettingsTab,
     isLogOpen, setIsLogOpen, isSaveLoadUIOpen, setIsSaveLoadUIOpen,
-    slMode, setSlMode, isLoading, setIsLoading,
+    slMode, setSlMode, isLoading,
     // 输入
     inputValue, setInputValue, selectedFiles, setSelectedFiles, handleFileSelect,
     // BGM
@@ -3149,7 +3134,7 @@ export default function AppCore({ router }) {
             <div className="absolute left-1/2 z-20 pointer-events-none flex flex-col transition-all duration-300 w-[94%] max-w-5xl" style={{ bottom: `calc(1.5rem - ${settings.dialogPositionY}px)`, transform: `translateX(-50%) ${settings.enableMobileUI ? `scale(${settings.mobileUIScale || 1.0})` : ''}`, transformOrigin: 'bottom center' }}>
               <div className={`transition-opacity duration-300 ${(!activePluginUI && latestMessage) || (activePluginUI && pluginDialog.speaker) ? 'opacity-100' : 'opacity-0'}`}>
                 <div className={`px-4 md:px-8 py-1 rounded-t-lg w-fit text-sm md:text-xl font-bold tracking-widest text-white ${settings.dialogOpacity > 0 ? 'backdrop-blur-md' : ''} pointer-events-auto transition-colors duration-300`} style={{ backgroundColor: activePluginUI ? hexToRgba('#312e81', settings.dialogOpacity) : (latestMessage?.role === 'user' ? hexToRgba('#064e3b', settings.dialogOpacity) : hexToRgba('#312e81', settings.dialogOpacity)), borderLeft: `4px solid rgba(${(!activePluginUI && latestMessage?.role === 'user') ? '52, 211, 153' : '129, 140, 248'}, ${settings.dialogOpacity > 0 ? 1 : 0})` }}>
-                  {activePluginUI ? pluginDialog.speaker : (latestMessage?.role === 'user' ? settings.userName : settings.aiName)}
+                  {activePluginUI ? pluginDialog.speaker : (latestMessage?.role === 'user' ? settings.userName : '亚托莉')}
                 </div>
               </div>
 
@@ -3185,12 +3170,17 @@ export default function AppCore({ router }) {
                             ))}
                         </div>
                     )}
+                    {agentChat.error && <p role="alert" className="text-red-200 text-sm">{agentChat.error}</p>}
+                    {agentChat.busy && <div className="flex items-center justify-between text-white/80 text-sm mb-2">
+                      <span role="status">亚托莉正在回复…</span>
+                      <button aria-label="停止回复" onClick={() => agentChat.stop().catch(error => showToast(error.message, 'error'))} className="px-3 py-1 rounded bg-white/15">停止</button>
+                    </div>}
                     <div className={`flex items-center w-full ${settings.enableMobileUI ? 'gap-1.5 md:gap-3' : 'gap-3'}`}>
                       <input type="file" accept="image/*,.txt,.md,.json,.csv" multiple hidden ref={fileInputRef} onChange={handleFileSelect} />
                       <button onClick={() => fileInputRef.current.click()} className={`text-white/50 hover:text-white transition-colors shrink-0 bg-white/5 hover:bg-white/10 rounded-md ${settings.enableMobileUI ? 'p-1.5 md:p-2' : 'p-2'}`} title="上传附件(图片/文档)"><Plus size={settings.enableMobileUI ? 18 : 20} className={settings.enableMobileUI ? "md:w-5 md:h-5" : ""}/></button>
                       <div className="flex-1 relative">
                         <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={handleKeyDown} placeholder={settings.workMode ? "编程模式，无字数限制..." : "输入你想说的话..."} disabled={isLoading} className={`w-full bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/30 focus:outline-none focus:border-indigo-400 focus:bg-black/40 transition-all font-sans disabled:opacity-50 ${settings.enableMobileUI ? 'px-2 py-1.5 md:px-4 md:py-2 landscape:py-1 text-xs md:text-base' : 'px-4 py-3 text-base'}`} />
-                        <button onClick={handleSendMessage} disabled={(!inputValue.trim() && selectedFiles.length === 0) || isLoading} className={`absolute top-1/2 -translate-y-1/2 bg-indigo-500/80 hover:bg-indigo-400 disabled:bg-white/10 text-white rounded-md transition-colors ${settings.enableMobileUI ? 'right-1.5 md:right-2 p-1.5 md:p-2' : 'right-2 p-2'}`}><Send size={settings.enableMobileUI ? 16 : 18} className={settings.enableMobileUI ? "md:w-[18px] md:h-[18px]" : ""} /></button>
+                        <button aria-label="发送" onClick={handleSendMessage} disabled={(!inputValue.trim() && selectedFiles.length === 0) || isLoading} className={`absolute top-1/2 -translate-y-1/2 bg-indigo-500/80 hover:bg-indigo-400 disabled:bg-white/10 text-white rounded-md transition-colors ${settings.enableMobileUI ? 'right-1.5 md:right-2 p-1.5 md:p-2' : 'right-2 p-2'}`}><Send size={settings.enableMobileUI ? 16 : 18} className={settings.enableMobileUI ? "md:w-[18px] md:h-[18px]" : ""} /></button>
                       </div>
                     </div>
                   </div>
@@ -3596,10 +3586,7 @@ export default function AppCore({ router }) {
           <div className="flex justify-between items-center p-6 border-b border-white/10 bg-black/40">
             <div className="flex items-center gap-4">
               <h2 className="text-white text-2xl font-bold tracking-widest">历史剧情 (Log)</h2>
-              <select value={activeSessionId || ''} onChange={(e) => setActiveSessionId(e.target.value)} className="bg-white/10 border border-white/20 text-white text-sm rounded px-3 py-1 outline-none">
-                {sessions.map(s => <option key={s.id} value={s.id} className="bg-slate-800">{s.title}</option>)}
-              </select>
-              <button onClick={createNewSession} className="text-indigo-300 hover:text-white text-sm flex items-center"><Plus size={14} className="mr-1"/>新剧情</button>
+              <span className="text-white/60">与亚托莉的对话</span>
             </div>
             <button onClick={() => setIsLogOpen(false)} className="text-white/50 hover:text-white p-2"><X size={28} /></button>
           </div>
@@ -3609,7 +3596,7 @@ export default function AppCore({ router }) {
             {activeSession?.messages?.map((msg, idx) => (
               <div key={idx} className={`flex flex-col group ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div className="flex items-center gap-2 mb-1">
-                   <span className="text-xs text-white/40">{msg.role === 'user' ? settings.userName : settings.aiName}</span>
+                   <span className="text-xs text-white/40">{msg.role === 'user' ? settings.userName : '亚托莉'}</span>
                    <button onClick={() => handleCopyMessage(msg.content)} className="opacity-0 group-hover:opacity-100 text-white/30 hover:text-white transition-all cursor-pointer" title="复制此段对话"><Copy size={12}/></button>
                 </div>
                 <div className={`max-w-[80%] rounded-xl px-5 py-3 text-lg leading-relaxed select-text cursor-text ${msg.role === 'user' ? 'bg-emerald-900/60 text-emerald-50 border border-emerald-500/30 rounded-tr-sm' : `bg-indigo-900/40 text-indigo-50 border border-indigo-500/30 rounded-tl-sm ${msg.isError ? 'border-red-500 text-red-300' : ''}`}`}>
@@ -3617,6 +3604,18 @@ export default function AppCore({ router }) {
                   <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
                 </div>
               </div>
+            ))}
+            {agentChat.session.tool_runs.map(run => (
+              <details key={run.run_id} className="rounded-xl border border-white/20 p-4 text-white/80">
+                <summary className="cursor-pointer">工具记录 · {run.status === 'completed' ? '已完成' : '未提交'} · {run.run_id.slice(0, 8)}</summary>
+                {run.tools.map((tool, toolIndex) => (
+                  <div key={toolIndex} className="mt-3">
+                    <div className="font-bold">{tool.name}</div>
+                    <pre className="whitespace-pre-wrap break-all text-sm">参数：{tool.arguments}{'\n'}结果：{tool.result ?? '没有返回结果'}</pre>
+                  </div>
+                ))}
+                {run.error && <p className="mt-2 text-red-300">{run.error}</p>}
+              </details>
             ))}
             <div ref={logEndRef} />
           </div>
