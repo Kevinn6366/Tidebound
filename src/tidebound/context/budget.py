@@ -5,7 +5,9 @@ import json
 from src.tidebound.config import AgentSettings
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import wire_messages
-from src.tidebound.runtime.types import Message
+from src.tidebound.runtime.types import ContextUsage, Message
+
+FORMAT_MARGIN = 1024
 
 
 def select_messages(system: str, history: list[list[Message]], current: list[Message],
@@ -25,11 +27,10 @@ def select_messages(system: str, history: list[list[Message]], current: list[Mes
     Raises:
         AgentError: 必需材料已超出保守预算。
     """
-    budget = settings.context_limit - settings.max_output_tokens - 1024
+    budget = settings.context_limit - settings.max_output_tokens - FORMAT_MARGIN
 
     def fits(messages: list[Message]) -> bool:
-        payload = {"messages": wire_messages(system, messages), "tools": tools}
-        return len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) <= budget
+        return measure_input(system, messages, tools) <= budget
 
     selected = list(current)
     if not fits(selected):
@@ -40,3 +41,32 @@ def select_messages(system: str, history: list[list[Message]], current: list[Mes
             break
         selected = candidate
     return selected
+
+
+def measure_input(system: str, messages: list[Message], tools: list[dict[str, object]]) -> int:
+    """按与上下文选取完全相同的 JSON 字节口径计算输入大小。
+
+    Args:
+        system: 本次角色与一次性规则。
+        messages: 实际选中的历史和本轮消息。
+        tools: 本次工具声明。
+
+    Returns:
+        JSON UTF-8 字节数，不是供应商精确 token 统计。
+    """
+    payload = {"messages": wire_messages(system, messages), "tools": tools}
+    return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+
+def context_usage(settings: AgentSettings, input_used: int | None = None) -> ContextUsage:
+    """构造用于前端展示的预算明细。
+
+    Args:
+        settings: 当前执行的上下文与输出预留配置。
+        input_used: 最近实际模型请求的输入估算量，未请求时为空。
+
+    Returns:
+        总预算、输入估算、输出预留和格式余量。
+    """
+    return ContextUsage(total=settings.context_limit, input_used=input_used,
+                        output_reserved=settings.max_output_tokens, format_margin=FORMAT_MARGIN)

@@ -1,5 +1,8 @@
 import { useAgentChat } from '../hooks/useAgentChat';
 import { useStreamingText } from '../hooks/useStreamingText';
+import ContextBudgetRing from '../components/ContextBudgetRing';
+import DevToolbox from '../components/DevToolbox';
+import { getSessionUser } from '../services/authClient';
 import { frontendFetch as fetch } from '../services/frontendFetch';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
@@ -2045,6 +2048,19 @@ export default function AppCore({ router }) {
     }
   };
 
+  /** 清空管理员自身上下文，成功后恢复空草稿和初始展示页。 */
+  const handleResetContext = async () => {
+    try {
+      await agentChat.reset();
+      setInputValue('');
+      setSelectedFiles([]);
+      setVnPage(0);
+      showToast('上下文已清空，可以开始新的调试对话。', 'success');
+    } catch (error) {
+      showToast(error.message || '清空上下文失败', 'error');
+    }
+  };
+
   const currentBgItem = bgList.find(b => b.id === settings.currentBgId);
   const activeBgUrl = appMode === 'title' ? (localTitleBgImage || '/app/bg.png') : (currentBgItem ? (currentBgItem.url || currentBgItem.dataUrl || '/app/bg.png') : '/app/bg.png');
   const activeSession = useMemo(() => ({ id: 'atri', title: '与亚托莉的对话', messages: agentChat.session.messages }), [agentChat.session.messages]);
@@ -2874,6 +2890,9 @@ export default function AppCore({ router }) {
       .atri-container .bg-white\\/60 button.text-red-500 { background: transparent !important; box-shadow: none !important; color: #ef4444 !important; }
       `}} />
  
+      {getSessionUser()?.role === 'admin' && <DevToolbox resetting={agentChat.resetting}
+        disabled={agentChat.busy && !agentChat.session.active_run} onReset={handleResetContext} />}
+
  {/* ✨ 新增：全局备份与恢复进度条 (左上角悬浮) */}
       {backupProgress.visible && (
         <div className="fixed top-6 left-6 z-[100000] bg-black/85 backdrop-blur-xl border border-white/20 p-4 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.6)] flex flex-col gap-2.5 w-72 pointer-events-none transition-all duration-300 animate-fade-in">
@@ -3288,8 +3307,8 @@ export default function AppCore({ router }) {
                       )}
                     </div>
                   )}
-                  {settings.shortcuts?.memo && !activePluginUI && <span className={`cursor-pointer transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap hover:text-white`} onClick={(e) => triggerShortcut('memo', () => { setIsMemoOpen(true); }, e)} title="记录备忘录或日程安排"><FileText size={14} /> 备忘</span>}
-                  {settings.shortcuts?.workMode && !activePluginUI && <span className={`cursor-pointer transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap ${settings.workMode ? 'text-amber-400 drop-shadow-[0_0_5px_rgba(251,191,36,0.8)]' : 'hover:text-white'}`} onClick={(e) => triggerShortcut('workMode', () => { const newMode = !settings.workMode; setSettings({...settings, workMode: newMode, ttsEnabled: newMode ? false : settings.ttsEnabled}); if (newMode) showToast("💻 OpenCode 工作模式开启！消息将由 OpenCode 处理（支持文件操作、联网搜索）", "success", 5000); else showToast("🌸 聊天模式开启！", "info"); }, e)} title="工作模式 (OpenCode)"><Monitor size={14} /> {settings.workMode ? '工作:开' : '工作:关'}</span>}
+                  {!activePluginUI && <ContextBudgetRing usage={agentChat.session.context_usage} />}
+
                   {ocTaskId && <span className={`cursor-pointer transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap ${ocVisible ? 'text-blue-300' : 'text-gray-500 hover:text-white'}`} onClick={() => setOcVisible(!ocVisible)} title="显示/隐藏 OpenCode 工作窗"><Square size={12} /> OC窗</span>}
                   
                   {settings.shortcuts?.faceTracking && !activePluginUI && <span className={`cursor-pointer transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap ${settings.enableFaceTracking ? 'text-indigo-300 drop-shadow-[0_0_5px_rgba(165,180,252,0.8)]' : 'hover:text-white'}`} onClick={(e) => triggerShortcut('faceTracking', () => { setSettings({...settings, enableFaceTracking: !settings.enableFaceTracking}); }, e)} title="开启/关闭摄像头实时面捕 (Face Tracking)"><Video size={14} className={isFaceTrackingLoading ? 'animate-pulse' : ''}/> {settings.enableFaceTracking ? '面捕:开' : '面捕:关'}</span>}

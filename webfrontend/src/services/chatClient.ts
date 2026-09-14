@@ -5,7 +5,15 @@ export interface ChatMessageInput {
   content: string;
   attachments: { type: string; name: string; data: string }[];
 }
+export interface ContextUsage {
+  total: number;
+  input_used: number | null;
+  output_reserved: number;
+  format_margin: number;
+}
+
 export interface RunView {
+  context_usage: ContextUsage | null;
   run_id: string;
   status: 'running' | 'completed' | 'stopped' | 'failed' | 'interrupted';
   tools: { call_id: string; name: string; arguments: string; result: string | null }[];
@@ -15,6 +23,7 @@ export interface RunView {
   error: string | null;
 }
 export interface SessionView {
+  context_usage: ContextUsage | null;
   character: 'atri';
   character_name: '亚托莉';
   messages: { id: string; role: 'user' | 'assistant'; content: string }[];
@@ -48,6 +57,22 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
 }
 
 /**
+ * 校验后端实际预算统计，保留尚未请求时的未知输入状态。
+ * @param data - 未知的预算对象。
+ * @returns 已校验的用量，旧执行未记录时为空。
+ * @throws 预算字段非法。
+ */
+function parseContextUsage(data: unknown): ContextUsage | null {
+  if (data === null) return null;
+  if (typeof data !== 'object' || data === null
+    || !('total' in data) || typeof data.total !== 'number' || data.total <= 0
+    || !('input_used' in data) || (data.input_used !== null && (typeof data.input_used !== 'number' || data.input_used < 0))
+    || !('output_reserved' in data) || typeof data.output_reserved !== 'number' || data.output_reserved < 0
+    || !('format_margin' in data) || typeof data.format_margin !== 'number' || data.format_margin < 0) throw new Error('上下文预算格式非法');
+  return { total: data.total, input_used: data.input_used, output_reserved: data.output_reserved, format_margin: data.format_margin };
+}
+
+/**
  * 检查执行视图，拒绝把非法响应当作成功回复。
  * @param data - 服务端返回的未知数据。
  * @returns 经过结构校验的执行视图。
@@ -73,7 +98,8 @@ function parseRun(data: unknown): RunView {
   if (data.status === 'completed' && (typeof data.reply !== 'string' || !data.reply.trim())) {
     throw new Error('模型没有返回完整回复');
   }
-  return data as RunView;
+  if (!('context_usage' in data)) throw new Error('缺少上下文用量');
+  return { ...data, context_usage: parseContextUsage(data.context_usage) } as RunView;
 }
 
 /**
@@ -82,9 +108,19 @@ function parseRun(data: unknown): RunView {
  * @throws 网络、HTTP 或结构错误。
  */
 export async function loadChatSession(): Promise<SessionView> {
-  const data = await request('/api/chat/session');
+  return parseSession(await request('/api/chat/session'));
+}
+
+/**
+ * 校验会话查询与重置返回的统一视图。
+ * @param data - 服务端未知响应。
+ * @returns 已校验的会话视图。
+ * @throws 响应结构非法。
+ */
+function parseSession(data: unknown): SessionView {
   if (typeof data !== 'object' || data === null || !('character' in data) || data.character !== 'atri'
     || !('character_name' in data) || data.character_name !== '亚托莉'
+    || !('context_usage' in data)
     || !('tool_runs' in data) || !Array.isArray(data.tool_runs)
     || !('messages' in data) || !Array.isArray(data.messages) || !('active_run' in data)) {
     throw new Error('会话响应格式非法');
@@ -95,7 +131,7 @@ export async function loadChatSession(): Promise<SessionView> {
       || !('content' in item) || typeof item.content !== 'string') throw new Error('历史消息格式非法');
     return { id: item.id, role: item.role, content: item.content };
   });
-  return { character: 'atri', character_name: '亚托莉', messages, tool_runs: data.tool_runs.map(parseRun),
+  return { character: 'atri', character_name: '亚托莉', context_usage: parseContextUsage(data.context_usage), messages, tool_runs: data.tool_runs.map(parseRun),
     active_run: data.active_run === null ? null : parseRun(data.active_run) };
 }
 
@@ -168,4 +204,14 @@ export async function streamChatRun(id: string, signal: AbortSignal, onUpdate: (
     await reader.cancel().catch(() => undefined); // 已断开的订阅无需再次取消。
     reader.releaseLock();
   }
+}
+
+
+/**
+ * 清空当前管理员账号的有效上下文，保留审计记录。
+ * @returns 重置后的初始会话视图。
+ * @throws 非管理员、网络或服务端重置失败。
+ */
+export async function resetChatContext(): Promise<SessionView> {
+  return parseSession(await request('/api/chat/context/reset', { method: 'POST' }));
 }

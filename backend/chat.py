@@ -4,9 +4,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from src.tidebound.context.budget import context_usage
 from src.tidebound.errors import AgentError
 from src.tidebound.runtime.session import ChatSession
-from src.tidebound.runtime.types import RunRecord
+from src.tidebound.runtime.types import ContextUsage, RunRecord
 
 
 class ChatAttachment(BaseModel):
@@ -42,6 +43,7 @@ class RunView(BaseModel):
     run_id: str
     status: str
     tools: list[ToolResultView] = Field(default_factory=list)
+    context_usage: ContextUsage | None = None
     preview: str = ""
     user_content: str = ""
     reply: str | None = None
@@ -61,6 +63,7 @@ class SessionView(BaseModel):
     messages: list[DisplayMessage]
     active_run: RunView | None
     tool_runs: list[RunView]
+    context_usage: ContextUsage
 
 
 def run_view(record: RunRecord) -> RunView:
@@ -85,7 +88,7 @@ def run_view(record: RunRecord) -> RunView:
         elif message.role == "tool" and message.tool_call_id in pending:
             pending[message.tool_call_id].result = message.content
     return RunView(run_id=record.run_id, status=record.status, reply=reply, tools=tool_views,
-                   preview=record.preview if record.status == "running" else "", user_content=record.user_content,
+                   context_usage=record.context_usage, preview=record.preview if record.status == "running" else "", user_content=record.user_content,
                    error_code=record.error_code, error=record.error)
 
 
@@ -121,7 +124,10 @@ def session_view(service: ChatSession, owner: str) -> SessionView:
     messages: list[DisplayMessage] = []
     active = None
     tool_runs: list[RunView] = []
+    usage = context_usage(service.settings)
     for record in service.records(owner):
+        if record.context_usage is not None and record.status in ("running", "completed"):
+            usage = record.context_usage
         view = run_view(record)
         if view.tools:
             tool_runs.append(view)
@@ -132,4 +138,4 @@ def session_view(service: ChatSession, owner: str) -> SessionView:
                 DisplayMessage(id=f"{record.run_id}:user", role="user", content=record.user_content),
                 DisplayMessage(id=f"{record.run_id}:assistant", role="assistant", content=record.messages[-1].content),
             ])
-    return SessionView(messages=messages, active_run=active, tool_runs=tool_runs)
+    return SessionView(messages=messages, active_run=active, tool_runs=tool_runs, context_usage=usage)

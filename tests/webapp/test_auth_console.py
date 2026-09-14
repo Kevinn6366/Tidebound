@@ -202,3 +202,32 @@ def test_console_complete_requests_permissions_and_no_truncation(tmp_path: Path)
     assert response.json()['body'] == body
     assert admin.get(endpoint + '/' + str(uuid4())).status_code == 404
     assert admin.get(endpoint + '/invalid-path').status_code == 422
+
+
+def test_only_admin_can_reset_own_context(tmp_path: Path) -> None:
+    """管理员重置仅作用于自身，普通账号和跨站请求无权执行。
+
+    Args:
+        tmp_path: 隔离测试数据目录。
+    """
+    app = make_app(tmp_path)
+    admin, other, anonymous = (TestClient(app) for _ in range(3))
+    admin.post('/api/auth/setup', json=CREDENTIALS)
+    other.post('/api/auth/register', json=CREDENTIALS | {'username': 'other'})
+    scopes = [app.state.auth.resolve(client.cookies.get('tidebound_session')).scope for client in (admin, other)]
+    for scope in scopes:
+        app.state.chat.store.save(scope, RunRecord(run_id=str(uuid4()), created_at='2026-09-14T00:00:00Z',
+            status='completed', user_content='旧对话', messages=[Message(role='user', content='旧对话'),
+            Message(role='assistant', content='旧回复')]))
+    endpoint = '/api/chat/context/reset'
+    assert anonymous.post(endpoint).status_code == 401
+    assert other.post(endpoint).status_code == 403
+    assert admin.post(endpoint, headers={'origin': 'https://evil.example'}).status_code == 403
+    response = admin.post(endpoint)
+    assert response.status_code == 200
+    assert response.json()['messages'] == []
+    assert response.json()['tool_runs'] == []
+    assert response.json()['context_usage']['input_used'] is None
+    assert len(other.get('/api/chat/session').json()['messages']) == 2
+    assert len(app.state.chat.store.list_runs(scopes[0])) == 1
+    assert admin.get('/api/chat/session').json()['messages'] == []

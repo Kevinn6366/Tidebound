@@ -225,3 +225,44 @@ def test_oversized_injection_blocks_next_model_request(tmp_path: Path) -> None:
         assert len(model.inputs) == 1
 
     asyncio.run(scenario())
+
+
+def test_context_reset_stops_old_run_and_survives_restart(tmp_path: Path) -> None:
+    """重置后旧执行不能提交，新请求和重启均只读取新时间线。
+
+    Args:
+        tmp_path: 隔离执行与时间线状态文件。
+    """
+    async def scenario() -> None:
+        settings = AgentSettings(base_url='http://fixture', model='fixture', data_dir=tmp_path)
+        service = ChatSession(settings, ScriptedModel([final_reply()]))
+        owner, other = uuid4().hex, uuid4().hex
+        old_id = str(uuid4())
+        service.start(owner, old_id, '旧事实')
+        await service.active[owner].task
+        service.start(other, str(uuid4()), '其他账号事实')
+        await service.active[other].task
+        waiting = WaitingModel()
+        service.model = waiting
+        active_id = str(uuid4())
+        service.start(owner, active_id, '尚未完成')
+        await waiting.entered.wait()
+        await service.reset_context(owner)
+        assert service.get(owner, active_id).status == 'stopped'
+        assert session_view(service, owner).messages == []
+        assert session_view(service, owner).active_run is None
+        assert session_view(service, owner).context_usage.input_used is None
+        assert len(session_view(service, other).messages) == 2
+        assert len(service.store.list_runs(owner)) == 2  # 审计文件保留。
+        with pytest.raises(AgentError) as error:
+            service.start(owner, old_id, '旧事实')
+        assert error.value.code == 'run_archived'
+        model = ScriptedModel([final_reply()])
+        restarted = ChatSession(settings, model)
+        assert session_view(restarted, owner).messages == []
+        restarted.start(owner, str(uuid4()), '全新输入')
+        await restarted.active[owner].task
+        assert [message.content for message in model.inputs[0]] == ['全新输入']
+        assert len(session_view(restarted, owner).messages) == 2
+
+    asyncio.run(scenario())

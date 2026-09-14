@@ -13,7 +13,7 @@ from src.tidebound.llm import ChatCompletionsClient, ModelClient
 from src.tidebound.prompting import load_character_bundle
 from src.tidebound.runtime.agent_loop import agent_loop
 from src.tidebound.runtime.preview import preview_sink
-from src.tidebound.runtime.types import Message, RunRecord
+from src.tidebound.runtime.types import ContextUsage, Message, RunRecord
 from src.tidebound.storage.model_requests import request_run
 from src.tidebound.storage.runs import RunStore
 from src.tidebound.tools.registry import create_tools
@@ -37,20 +37,22 @@ class ChatSession:
         self.tools = create_tools(settings.timezone)
         self.store = RunStore(settings.data_dir)
         self.active: dict[str, ActiveRun] = {}
+        self.resetting: set[str] = set()
         ZoneInfo(settings.timezone)
 
     @property
     def configured(self) -> bool:
         return bool(self.settings.mode == "dev" and self.settings.base_url and self.settings.model)
 
-    def records(self, owner: str) -> list[RunRecord]:
-        """把无活动任务的遗留 running 记录恢复为中断，不重放工具。
+    def records(self, owner: str, *, include_archived: bool = False) -> list[RunRecord]:
+        """恢复遗留执行并读取有效时间线，不重放工具。
 
         Args:
             owner: 当前开发范围。
+            include_archived: 内部查询幂等记录时是否包括重置前的历史。
 
         Returns:
-            恢复后的执行列表。
+            恢复后的执行列表，默认仅包含有效时间线。
         """
         records = self.store.list_runs(owner)
         for record in records:
@@ -60,8 +62,9 @@ class ChatSession:
                 record.error_code = "run_interrupted"
                 record.error = "服务中断了本次回复，本轮未提交。"
                 self.store.save(owner, record)
+        timeline_id = self.store.current_timeline(owner)
         return [self.active[owner].record if owner in self.active and item.run_id == self.active[owner].record.run_id
-                else item for item in records]
+                else item for item in records if include_archived or item.timeline_id == timeline_id]
 
     def get(self, owner: str, run_id: str) -> RunRecord:
         """查找当前范围的执行。
@@ -79,7 +82,7 @@ class ChatSession:
         active = self.active.get(owner)
         if active is not None and active.record.run_id == run_id:
             return active.record
-        record = next((item for item in self.records(owner) if item.run_id == run_id), None)
+        record = next((item for item in self.records(owner, include_archived=True) if item.run_id == run_id), None)
         if record is None:
             raise AgentError("run_not_found", "执行不存在。", 404)
         return record
@@ -100,9 +103,15 @@ class ChatSession:
         """
         if self.settings.mode != "dev":
             raise AgentError("dev_only", "v0.01 只支持本地单 worker dev。", 503)
-        records = self.records(owner)
-        existing = next((item for item in records if item.run_id == run_id), None)
+        if owner in self.resetting:
+            raise AgentError("context_resetting", "正在清空上下文，请稍后发送。", 409)
+        all_records = self.records(owner, include_archived=True)
+        timeline_id = self.store.current_timeline(owner)
+        records = [item for item in all_records if item.timeline_id == timeline_id]
+        existing = next((item for item in all_records if item.run_id == run_id), None)
         if existing:
+            if existing.timeline_id != timeline_id:
+                raise AgentError("run_archived", "该执行属于已清空的上下文，不能重新提交。", 409)
             if existing.user_content != content:
                 raise AgentError("run_id_conflict", "同一执行标识不能用于不同输入。", 409)
             return existing
@@ -113,7 +122,7 @@ class ChatSession:
             raise AgentError("model_not_configured", "请在后端 .env 配置模型服务地址、模型名和所需凭据。", 503)
         bundle = load_character_bundle(self.settings.prompts_dir)
         record = RunRecord(run_id=run_id, created_at=datetime.now(UTC).isoformat(),
-                           user_content=content, prompt_name=bundle.name)
+                           user_content=content, prompt_name=bundle.name, timeline_id=timeline_id)
         history = [item.messages for item in records if item.status == "completed"]
         stop = asyncio.Event()
         self.store.save(owner, record)
@@ -141,13 +150,21 @@ class ChatSession:
             if not stop.is_set() and record.status == "running":
                 record.preview = content
 
+        def update_context(usage: ContextUsage) -> None:
+            """记录本次请求的预算用量供页面和终态记录读取。
+
+            Args:
+                usage: 已通过预算选取的请求用量。
+            """
+            record.context_usage = usage
+
         preview_token = preview_sink.set(update_preview)
         context_token = request_run.set((owner, record.run_id))
         record.messages = [Message(role="user", content=record.user_content)]
         try:
             async with asyncio.timeout(self.settings.timeout_seconds):
-                await agent_loop(system, history, record.messages, self.model, self.settings, stop, self.tools)
-            if stop.is_set():
+                await agent_loop(system, history, record.messages, self.model, self.settings, stop, self.tools, update_context)
+            if stop.is_set() or record.timeline_id != self.store.current_timeline(owner):
                 raise AgentError("run_stopped", "本次回复已停止。")
             record.status = "completed"
         except AgentError as error:
@@ -188,6 +205,29 @@ class ChatSession:
         if active and active.record.run_id == run_id:
             active.stop.set()
         return record
+
+    async def reset_context(self, owner: str) -> None:
+        """撤销旧执行并切换到空历史，等待活动任务退出后允许新输入。
+
+        Args:
+            owner: 经应用层验证可重置的账号内部范围。
+
+        Raises:
+            AgentError: 同一账号正在重置。
+            OSError: 新时间线保存失败。
+        """
+        if owner in self.resetting:
+            raise AgentError("context_resetting", "正在清空上下文，请稍后。", 409)
+        self.resetting.add(owner)
+        try:
+            self.store.reset_context(owner)
+            active = self.active.get(owner)
+            if active is not None:
+                active.stop.set()
+                active.record.preview = ""
+                await asyncio.shield(active.task)
+        finally:
+            self.resetting.discard(owner)
 
     async def close(self) -> None:
         """停止并等待当前任务落盘，用于服务关闭。"""

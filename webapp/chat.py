@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from backend.chat import ChatMessageInput, RunView, SessionView, run_view, session_view, submit_message
-from webapp.auth import current_user
+from webapp.auth import current_user, require_owner
 
 router = APIRouter()
 
@@ -105,3 +105,25 @@ async def stream_run(run_id: UUID, request: Request) -> StreamingResponse:
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+
+@router.post("/api/chat/context/reset")
+async def reset_chat_context(request: Request) -> SessionView:
+    """仅允许管理员清空自身有效上下文并返回初始会话视图。
+
+    Args:
+        request: 携带服务端验证身份的请求，不接受其他账号范围参数。
+
+    Returns:
+        空聊天历史、空活动执行与初始预算状态。
+
+    Raises:
+        HTTPException: 未登录或当前账号不是管理员。
+        AgentError: 正在重置。
+        OSError: 重置状态无法保存。
+    """
+    user = current_user(request)
+    require_owner(request, user.uid, admin=True)
+    await request.app.state.chat.reset_context(user.scope)
+    return session_view(request.app.state.chat, user.scope)

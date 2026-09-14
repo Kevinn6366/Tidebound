@@ -66,6 +66,13 @@ def test_snapshots_match_http_body(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         assert [store.get(item.request_id).body for item in summaries] == bodies
         assert store.get(summaries[0].request_id).injection == ""
         assert "先获取当前时间再回答" in store.get(summaries[1].request_id).injection
+        usage = service.get(owner, run_id).context_usage
+        expected_input = len(json.dumps({"messages": bodies[-1]["messages"], "tools": bodies[-1]["tools"]},
+                                       ensure_ascii=False).encode("utf-8"))
+        assert usage.input_used == expected_input
+        assert usage.total == settings.context_limit
+        assert usage.output_reserved == settings.max_output_tokens
+        assert usage.format_margin == 1024
         rule = "先获取当前时间再回答"
         assert rule not in bodies[0]["messages"][0]["content"]
         assert rule in bodies[1]["messages"][0]["content"]
