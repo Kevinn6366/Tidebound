@@ -33,7 +33,7 @@ export default function ContextBudgetRing({ usage }: { usage: ContextUsage | nul
         {known && <div><dt>剩余预算</dt><dd>{Math.max(0, usage.total - used).toLocaleString()}</dd></div>}
       </dl> : <p>正在读取预算…</p>}
       <p>圆环包含输入估算与预留。输入按 UTF-8 字节保守估算，并非精确 token 用量。</p>
-      <p>显示最近一次模型请求，不包含尚未发送的草稿。</p>
+      <p>显示最近请求用量；后台整理完成后更新为当前上下文估算。不包含尚未发送的草稿。</p>
     </div>
   </details>;
 }

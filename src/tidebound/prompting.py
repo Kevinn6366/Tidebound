@@ -121,10 +121,11 @@ def load_prompt_bundles(root: Path, purposes: tuple[str, ...]) -> PromptBundle:
             (root / "master.yaml").read_text(encoding="utf-8"), Loader=UniqueKeyLoader,
         ))
         if "chat.character" not in manifest.prompts or any(
-            purpose != "chat.character" and not purpose.startswith("tools.injection.")
+            purpose not in {"chat.character", "context.compaction", "context.injection.summary"}
+            and not purpose.startswith("tools.injection.")
             for purpose in manifest.prompts
         ):
-            raise ValueError("只支持角色与工具注入 purpose")
+            raise ValueError("不支持的提示词 purpose")
         variants: dict[str, Variant] = {}
         names: set[str] = set()
         for purpose, languages in manifest.prompts.items():

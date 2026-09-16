@@ -76,8 +76,10 @@ class ChatCompletionsClient:
         debug.write("请求", f"model={self.settings.model}, messages={len(messages)}, tools={len(tools)}\n")
         stream = self.settings.debug or preview_sink.get() is not None
         request = {"model": self.settings.model, "messages": wire_messages(system, messages),
-                   "tools": tools, "tool_choice": "auto", "stream": stream,
+                   "stream": stream,
                    "max_tokens": self.settings.max_output_tokens}
+        if tools:
+            request.update(tools=tools, tool_choice="auto")
         if self.settings.reasoning_effort is not None:
             request["reasoning_effort"] = self.settings.reasoning_effort
         snapshot = ModelRequestStore(self.settings.data_dir).save(request)

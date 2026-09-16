@@ -7,17 +7,19 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from src.tidebound.config import AgentSettings
-from src.tidebound.context.budget import FORMAT_MARGIN
+from src.tidebound.context.budget import FORMAT_MARGIN, context_usage
+from src.tidebound.context.compaction import PreparedContext
 from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ChatCompletionsClient, ModelClient
 from src.tidebound.prompting import load_character_bundle
 from src.tidebound.runtime.agent_loop import agent_loop
+from src.tidebound.runtime.compaction import CompactionCoordinator
 from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.types import ContextUsage, Message, RunRecord
 from src.tidebound.storage.model_requests import request_run
 from src.tidebound.storage.runs import ContextBudget, RunStore
-from src.tidebound.tools.registry import create_tools
+from src.tidebound.tools.registry import create_tools, tool_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +34,13 @@ class ActiveRun:
 class ChatSession:
     """单进程 dev 服务；任务不随 HTTP 请求结束，范围间状态独立。"""
 
-    def __init__(self, settings: AgentSettings, model: ModelClient | None = None) -> None:
+    def __init__(self, settings: AgentSettings, model: ModelClient | None = None,
+                 summary_model: ModelClient | None = None) -> None:
         self.settings = settings
         self.model = model or ChatCompletionsClient(settings)
         self.tools = create_tools(settings.timezone)
         self.store = RunStore(settings.data_dir)
+        self.compaction = CompactionCoordinator(self.store, summary_model or model)
         self.active: dict[str, ActiveRun] = {}
         self.resetting: set[str] = set()
         ZoneInfo(settings.timezone)
@@ -56,6 +60,67 @@ class ChatSession:
         """
         budget = self.store.load_context_budget(owner)
         return self.settings.model_copy(update={} if budget is None else {"context_limit": budget.context_limit})
+
+    def compacted_usage(self, owner: str) -> ContextUsage | None:
+        """返回后台摘要发布后的当前上下文估算，让空闲页面及时显示释放的空间。
+
+        Args:
+            owner: 已鉴权账号范围。
+
+        Returns:
+            已应用摘要的预算；没有有效摘要时为空，保持原展示兼容。
+
+        Raises:
+            AgentError: 当前提示词无法加载。
+            OSError: 历史或摘要无法读取。
+        """
+        records = [item for item in self.records(owner) if item.status == "completed"]
+        timeline = self.store.current_timeline(owner)
+        if self.compaction.summaries.load(owner, timeline, [item.run_id for item in records]) is None:
+            return None
+        settings = self.settings_for(owner)
+        prepared, _ = self.compaction.read_context(owner, timeline,
+            load_character_bundle(settings.prompts_dir).content, records, [], tool_definitions(self.tools), settings)
+        return context_usage(settings, prepared.input_used)
+
+    async def compact_context(self, owner: str) -> ContextUsage:
+        """主动整理当前账号的已提交历史，复用后台任务且不生成聊天消息。
+
+        Args:
+            owner: 已由通信层验证权限的账号范围。
+
+        Returns:
+            成功发布摘要后的预算用量。
+
+        Raises:
+            AgentError: 非开发模式、正在回复或重置、没有新增历史、压缩失败或结果失效。
+            OSError: 历史或摘要无法读取。
+        """
+        if self.settings.mode != "dev":
+            raise AgentError("dev_only", "主动压缩仅在开发环境开放。", 403)
+        if owner in self.resetting or owner in self.active:
+            raise AgentError("context_busy", "请等待当前回复或清空操作结束后再整理上下文。", 409)
+        settings = self.settings_for(owner)
+        records = [item for item in self.records(owner) if item.status == "completed"]
+        timeline = self.store.current_timeline(owner)
+        previous = self.compaction.summaries.load(owner, timeline, [item.run_id for item in records])
+        if not records or (previous and len(previous.covered_run_ids) >= len(records)):
+            raise AgentError("nothing_to_compact", "暂无新增的已完成对话可压缩。", 409)
+        task = self.compaction.schedule(owner, timeline, load_character_bundle(settings.prompts_dir).content,
+            records, [], tool_definitions(self.tools), settings, records[-1].run_id, trigger="manual")
+        if task is None:
+            raise AgentError("compaction_unavailable", "整理服务正在关闭，请稍后重试。", 503)
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                raise
+            raise AgentError("compaction_cancelled", "整理已取消，上下文可能已被清空。", 409) from None
+        if self.store.current_timeline(owner) != timeline:
+            raise AgentError("compaction_stale", "上下文已变化，本次整理结果不再适用。", 409)
+        if result is None:
+            raise AgentError("compaction_failed", "整理未成功，原文和原摘要已保留；请检查预算或查看日志后重试。", 502)
+        return context_usage(settings, result.input_after)
 
     def update_context_budget(self, owner: str, context_limit: int) -> AgentSettings:
         """保存下一轮生效的账号预算，当前执行保持开始时的快照。
@@ -163,7 +228,7 @@ class ChatSession:
         bundle = load_character_bundle(self.settings.prompts_dir)
         record = RunRecord(run_id=run_id, created_at=datetime.now(UTC).isoformat(),
                            user_content=content, prompt_name=bundle.name, timeline_id=timeline_id)
-        history = [item.messages for item in records if item.status == "completed"]
+        history = [item for item in records if item.status == "completed"]
         stop = asyncio.Event()
         settings = self.settings_for(owner)
         self.store.save(owner, record)
@@ -172,7 +237,7 @@ class ChatSession:
         return record
 
     async def _execute(self, owner: str, record: RunRecord, system: str,
-                       history: list[list[Message]], stop: asyncio.Event, settings: AgentSettings) -> None:
+                       history: list[RunRecord], stop: asyncio.Event, settings: AgentSettings) -> None:
         """运行后台任务并在停止资格检查后提交。
 
         Args:
@@ -200,12 +265,40 @@ class ChatSession:
             """
             record.context_usage = usage
 
+        async def prepare_context(request_system: str, current: list[Message],
+                                  tools: list[dict[str, object]]) -> PreparedContext:
+            """获取已完成摘要，预算不足时等待后台压缩。
+
+            Args:
+                request_system: 主模型的角色与本次工具规则。
+                current: 当前轮次消息原文。
+                tools: 当前工具声明。
+
+            Returns:
+                满足预算的模型上下文。
+
+            Raises:
+                AgentError: 停止或上下文仍超限。
+            """
+            def mark_compacting() -> None:
+                """仅在主执行确实等待工作流时展示整理状态，摘要正文不进入预览。"""
+                if record.status == "running" and not stop.is_set():
+                    record.phase = "compacting"
+                    record.preview = ""
+
+            try:
+                return await self.compaction.prepare(owner, record.timeline_id, request_system, history,
+                    current, tools, settings, record.run_id, stop, on_wait=mark_compacting)
+            finally:
+                record.phase = "generating"
+
         preview_token = preview_sink.set(update_preview)
         context_token = request_run.set((owner, record.run_id))
         record.messages = [Message(role="user", content=record.user_content)]
         try:
             async with asyncio.timeout(settings.timeout_seconds):
-                await agent_loop(system, history, record.messages, self.model, settings, stop, self.tools, update_context)
+                await agent_loop(system, [item.messages for item in history], record.messages,
+                                 self.model, settings, stop, self.tools, update_context, prepare_context)
             if stop.is_set() or record.timeline_id != self.store.current_timeline(owner):
                 raise AgentError("run_stopped", "本次回复已停止。")
             record.status = "completed"
@@ -227,6 +320,9 @@ class ChatSession:
             try:
                 # 检查与原子写之间无 await，停止不能插入成功提交中间。
                 self.store.save(owner, record)
+                if record.status == "completed":
+                    self.compaction.schedule(owner, record.timeline_id, system, [*history, record], [],
+                                             tool_definitions(self.tools), settings, record.run_id)
             except OSError:
                 logger.error("Run persistence failed: %s", record.run_id)
             finally:
@@ -268,6 +364,7 @@ class ChatSession:
                 active.stop.set()
                 active.record.preview = ""
                 await asyncio.shield(active.task)
+            await self.compaction.cancel(owner)
         finally:
             self.resetting.discard(owner)
 
@@ -277,3 +374,4 @@ class ChatSession:
         for active in tasks:
             active.stop.set()
         await asyncio.gather(*(active.task for active in tasks), return_exceptions=True)
+        await self.compaction.close()

@@ -89,7 +89,7 @@ export default function ConsoleRequests({ uid }: { uid: string }): JSX.Element {
       <nav className="console-call-menu" aria-label="本轮模型请求">
         {activeRun.requests.map(request => <button key={request.request_id}
           aria-pressed={selected === request.request_id} onClick={() => setSelected(request.request_id)}>
-          第 {request.step} 次发送给 LLM
+          {request.purpose === 'context.compaction' ? '后台压缩' : '主回复'} · 第 {request.step} 次请求
         </button>)}
       </nav>
       {detail.id === selected && detail.error && <p role="alert" className="account-error">{detail.error}</p>}

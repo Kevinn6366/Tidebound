@@ -1,10 +1,11 @@
 """参考 Pi 的模型—工具—模型循环，保持与 HTTP 和存储无关。"""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from src.tidebound.config import AgentSettings
 from src.tidebound.context.budget import context_usage, measure_input, select_messages
+from src.tidebound.context.compaction import PreparedContext
 from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ModelClient
@@ -17,7 +18,9 @@ from src.tidebound.tools.registry import ToolMap, invoke_tool, tool_definitions
 
 async def agent_loop(system: str, history: list[list[Message]], current: list[Message],
                      model: ModelClient, settings: AgentSettings, stop: asyncio.Event, registry: ToolMap,
-                     on_context: Callable[[ContextUsage], None] | None = None) -> list[Message]:
+                     on_context: Callable[[ContextUsage], None] | None = None,
+                     prepare_context: Callable[[str, list[Message], list[dict[str, object]]],
+                                               Awaitable[PreparedContext]] | None = None) -> list[Message]:
     """执行有限模型循环，记录中间消息但仅返回完整轮次。
 
     Args:
@@ -29,6 +32,7 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
         stop: 会话层控制的停止信号。
         registry: 已授权的工具注册表，循环不依赖具体工具。
         on_context: 模型请求前接收实际预算用量的可选展示回调。
+        prepare_context: 会话提供的后台摘要与上下文组装入口。
 
     Returns:
         包含用户消息、工具链和最终回复的本轮消息。
@@ -47,7 +51,13 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
         request_system = "\n\n".join(part for part in (system, injection) if part)
         current_injection = injection
         injection = ""  # 上批工具规则仅用于紧接着的一次请求，不进入消息历史。
-        messages = select_messages(request_system, history, current, tools, settings)
+        if prepare_context is None:
+            messages = select_messages(request_system, history, current, tools, settings)
+        else:
+            prepared = await prepare_context(request_system, current, tools)
+            request_system, messages = prepared.system, prepared.messages
+        if stop.is_set():
+            raise AgentError("run_stopped", "本次回复已停止。")
         if on_context is not None:
             on_context(context_usage(settings, measure_input(request_system, messages, tools)))
         step_token = request_step.set(step + 1)

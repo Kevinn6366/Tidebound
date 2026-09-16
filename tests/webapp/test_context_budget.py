@@ -46,3 +46,23 @@ def test_budget_permissions_validation_and_persistence(tmp_path: Path) -> None:
     assert restarted.get(path).json()['total'] == 65536
     app.state.chat.settings.mode = 'prod'
     assert admin.put(path, json={'context_limit': 131072}).status_code == 403
+
+
+def test_manual_compaction_permissions(tmp_path: Path) -> None:
+    """手动整理只允许开发环境管理员，普通账号无法触发模型调用。
+
+    Args:
+        tmp_path: 隔离账号与运行数据目录。
+    """
+    app = make_app(tmp_path)
+    admin, user, anonymous = (TestClient(app) for _ in range(3))
+    path = '/api/chat/context/compact'
+    assert anonymous.post(path).status_code == 401
+    admin.post('/api/auth/setup', json=CREDENTIALS)
+    user.post('/api/auth/register', json=CREDENTIALS | {'username': 'ordinary'})
+    assert user.post(path).status_code == 403
+    response = admin.post(path)
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'nothing_to_compact'
+    app.state.chat.settings.mode = 'prod'
+    assert admin.post(path).status_code == 403

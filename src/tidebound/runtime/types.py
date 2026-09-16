@@ -41,6 +41,7 @@ class RunRecord(BaseModel):
     user_content: str
     messages: list[Message] = Field(default_factory=list)
     preview: str = Field(default="", exclude=True)
+    phase: Literal["generating", "compacting"] = Field(default="generating", exclude=True)
     context_usage: ContextUsage | None = None
     prompt_name: str = ""
     error_code: str | None = None

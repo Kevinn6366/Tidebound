@@ -32,6 +32,7 @@ export interface ModelRequestSummary {
   step: number;
   created_at: string;
   model: string;
+  purpose: string;
 }
 
 /**
@@ -47,9 +48,11 @@ function parseRequestSummary(data: unknown): ModelRequestSummary {
     || !('owner' in data) || typeof data.owner !== 'string'
     || !('step' in data) || typeof data.step !== 'number'
     || !('created_at' in data) || typeof data.created_at !== 'string'
-    || !('model' in data) || typeof data.model !== 'string') throw new Error('模型请求摘要格式非法');
+    || !('model' in data) || typeof data.model !== 'string'
+    || ('purpose' in data && typeof data.purpose !== 'string')) throw new Error('模型请求摘要格式非法');
   return { request_id: data.request_id, run_id: data.run_id, owner: data.owner,
-    step: data.step, created_at: data.created_at, model: data.model };
+    step: data.step, created_at: data.created_at, model: data.model,
+    purpose: 'purpose' in data && typeof data.purpose === 'string' ? data.purpose : 'chat' };
 }
 
 export interface ModelRequestRun {

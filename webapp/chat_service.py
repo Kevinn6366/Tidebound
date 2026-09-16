@@ -49,6 +49,7 @@ class ToolResultView(BaseModel):
 class RunView(BaseModel):
     run_id: str
     status: str
+    phase: Literal["generating", "compacting"] = "generating"
     tools: list[ToolResultView] = Field(default_factory=list)
     context_usage: ContextUsage | None = None
     preview: str = ""
@@ -94,7 +95,7 @@ def run_view(record: RunRecord) -> RunView:
                 tool_views.append(view)
         elif message.role == "tool" and message.tool_call_id in pending:
             pending[message.tool_call_id].result = message.content
-    return RunView(run_id=record.run_id, status=record.status, reply=reply, tools=tool_views,
+    return RunView(run_id=record.run_id, status=record.status, phase=record.phase, reply=reply, tools=tool_views,
                    context_usage=record.context_usage, preview=record.preview if record.status == "running" else "", user_content=record.user_content,
                    error_code=record.error_code, error=record.error)
 
@@ -146,4 +147,6 @@ def session_view(service: ChatSession, owner: str) -> SessionView:
                 DisplayMessage(id=f"{record.run_id}:user", role="user", content=record.user_content),
                 DisplayMessage(id=f"{record.run_id}:assistant", role="assistant", content=record.messages[-1].content),
             ])
+    if active is None:
+        usage = service.compacted_usage(owner) or usage
     return SessionView(messages=messages, active_run=active, tool_runs=tool_runs, context_usage=usage)

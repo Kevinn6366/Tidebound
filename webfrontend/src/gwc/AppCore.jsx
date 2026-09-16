@@ -3193,7 +3193,8 @@ export default function AppCore({ router }) {
                     )}
                     {agentChat.error && <p role="alert" className="text-red-200 text-sm">{agentChat.error}</p>}
                     {agentChat.busy && <div className="flex items-center justify-between text-white/80 text-sm mb-2">
-                      <span role="status">亚托莉正在回复…</span>
+                      <span role="status">{agentChat.session.active_run?.phase === 'compacting'
+                        ? '正在整理上下文…' : '亚托莉正在回复…'}</span>
                       <button aria-label="停止回复" onClick={() => agentChat.stop().catch(error => showToast(error.message, 'error'))} className="px-3 py-1 rounded bg-white/15">停止</button>
                     </div>}
                     <div className={`flex items-center w-full ${settings.enableMobileUI ? 'gap-1.5 md:gap-3' : 'gap-3'}`}>

@@ -14,6 +14,7 @@ from src.tidebound.errors import AgentError
 request_run: ContextVar[tuple[str, str] | None] = ContextVar("request_run", default=None)
 request_step: ContextVar[int] = ContextVar("request_step", default=0)
 request_injection: ContextVar[str | None] = ContextVar("request_injection", default=None)
+request_purpose: ContextVar[str] = ContextVar("request_purpose", default="chat")
 
 
 class RequestSummary(BaseModel):
@@ -23,6 +24,7 @@ class RequestSummary(BaseModel):
     step: int
     created_at: str
     model: str
+    purpose: str = "chat"
 
 
 class RequestSnapshot(RequestSummary):
@@ -62,7 +64,8 @@ class ModelRequestStore:
         owner, run_id = context
         snapshot = RequestSnapshot(request_id=uuid4().hex, run_id=run_id, owner=owner,
                                    step=request_step.get(), created_at=datetime.now(UTC).isoformat(),
-                                   model=str(body["model"]), body=body, injection=request_injection.get())
+                                   model=str(body["model"]), purpose=request_purpose.get(),
+                                   body=body, injection=request_injection.get())
         self.root.mkdir(parents=True, exist_ok=True)
         target = self.root / f"{snapshot.request_id}.json"
         temporary = target.with_suffix(".tmp")
@@ -113,7 +116,7 @@ class ModelRequestStore:
             groups.setdefault((snapshot.owner, snapshot.run_id), []).append(snapshot)
         result: list[RequestRunSummary] = []
         for (owner, run_id), snapshots in groups.items():
-            snapshots.sort(key=lambda item: (item.step, item.created_at, item.request_id))
+            snapshots.sort(key=lambda item: (item.created_at, item.request_id))
             first = snapshots[0]
             messages = first.body.get("messages", [])
             user_content = ""

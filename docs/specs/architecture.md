@@ -1,5 +1,7 @@
 # 汐伴 · Tidebound 宏观架构技术规格
 
+2026-09-16 当前实现补充：单 worker dev 已接入 [静默后台上下文压缩](context-compaction.md)，采用 90% 触发、70% 压缩目标及滚动历史摘要。该上下文产物不等于完整长期记忆系统；流程节点在 `src/tidebound/workflows/compaction/`，运行时只协调后台任务。
+
 文档编号为 `ARCH-SPEC-0001`，版本为 `0.4`，建立日期为 `2026-09-13`。项目名称暂定为“汐伴 · Tidebound”，项目提出者与架构决策者为 `kevin6366`，讨论参与者与文档整理者为 `gpt6astra-pro`。本文件建议作为仓库中的 `docs/specs/architecture.md` 保存。
 
 ## 一、文档用途与约束范围

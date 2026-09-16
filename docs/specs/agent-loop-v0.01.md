@@ -1,5 +1,7 @@
 # Agent loop v0.01
 
+2026-09-16 修订：主会话已接入静默后台滚动摘要，覆盖下文首版“不迁移压缩机制”及仅选择最近完整轮次的边界。工作流采用本项目 Python 实现，详见 [上下文压缩](context-compaction.md)，未引入 Pi 或通用工作流框架。
+
 日期：2026-09-14。用户最新确认的首版交付覆盖本文件与旧规格冲突的范围：前后端固定 atri，整个 `prompts/` 是亚托莉的一套提示词，后续通过替换整个目录替换内容；当前包含 `chat.character` 与工具调用后一次性使用的 `tools.injection.*`，注入设计见 [提示词分层与注入](prompt-injection.md)。旧 `characters/atri`、`shared`、`workflows/summary` 的提示词目录划分废止。
 
 ## 最小闭环

@@ -177,3 +177,22 @@ async def update_context_budget(budget: ContextBudgetInput, request: Request) ->
     user = current_user(request)
     require_owner(request, user.uid, admin=True)
     return context_usage(request.app.state.chat.update_context_budget(user.scope, budget.context_limit))
+
+
+@router.post("/api/chat/context/compact")
+async def compact_chat_context(request: Request) -> ContextUsage:
+    """允许开发环境管理员主动压缩自己的上下文并等待结果。
+
+    Args:
+        request: 携带已鉴权账号和会话服务的请求，不接受其他账号参数。
+
+    Returns:
+        完成压缩后的预算用量。
+
+    Raises:
+        HTTPException: 未登录或非管理员。
+        AgentError: 当前无法压缩、工作流失败或结果已失效。
+    """
+    user = current_user(request)
+    require_owner(request, user.uid, admin=True)
+    return await request.app.state.chat.compact_context(user.scope)

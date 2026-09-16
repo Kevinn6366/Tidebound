@@ -16,6 +16,7 @@ export interface RunView {
   context_usage: ContextUsage | null;
   run_id: string;
   status: 'running' | 'completed' | 'stopped' | 'failed' | 'interrupted';
+  phase: 'generating' | 'compacting';
   tools: { call_id: string; name: string; arguments: string; result: string | null }[];
   preview: string;
   user_content: string;
@@ -100,7 +101,9 @@ function parseRun(data: unknown): RunView {
     throw new Error('模型没有返回完整回复');
   }
   if (!('context_usage' in data)) throw new Error('缺少上下文用量');
-  return { ...data, context_usage: parseContextUsage(data.context_usage) } as RunView;
+  const phase = 'phase' in data ? data.phase : 'generating';
+  if (phase !== 'generating' && phase !== 'compacting') throw new Error('执行阶段格式非法');
+  return { ...data, phase, context_usage: parseContextUsage(data.context_usage) } as RunView;
 }
 
 /**
@@ -242,4 +245,16 @@ export async function saveContextBudget(contextLimit: number): Promise<ContextUs
   }));
   if (!budget) throw new Error('缺少预算配置');
   return budget;
+}
+
+
+/**
+ * 主动运行当前管理员账号的上下文压缩工作流。
+ * @returns 发布摘要后的预算用量。
+ * @throws 无权限、没有可压历史、工作流失败或网络错误。
+ */
+export async function compactContext(): Promise<ContextUsage> {
+  const usage = parseContextUsage(await request('/api/chat/context/compact', { method: 'POST' }));
+  if (!usage) throw new Error('缺少压缩后的预算用量');
+  return usage;
 }
