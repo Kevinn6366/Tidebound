@@ -6,8 +6,18 @@ from uuid import UUID
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from backend.chat import ChatMessageInput, RunView, SessionView, run_view, session_view, submit_message
+from src.tidebound.context.budget import context_usage
+from src.tidebound.runtime.types import ContextUsage
 from webapp.auth.dependencies import current_user, require_owner
+from webapp.chat_service import (
+    ChatMessageInput,
+    ContextBudgetInput,
+    RunView,
+    SessionView,
+    run_view,
+    session_view,
+    submit_message,
+)
 
 router = APIRouter()
 
@@ -127,3 +137,43 @@ async def reset_chat_context(request: Request) -> SessionView:
     require_owner(request, user.uid, admin=True)
     await request.app.state.chat.reset_context(user.scope)
     return session_view(request.app.state.chat, user.scope)
+
+
+@router.get("/api/chat/context/budget")
+async def get_context_budget(request: Request) -> ContextUsage:
+    """读取当前管理员下一轮使用的预算。
+
+    Args:
+        request: 携带已验证身份和会话服务的请求。
+
+    Returns:
+        当前配置与回复预留；不混用历史请求用量。
+
+    Raises:
+        HTTPException: 未登录或非管理员。
+        OSError: 预算读取失败。
+    """
+    user = current_user(request)
+    require_owner(request, user.uid, admin=True)
+    return context_usage(request.app.state.chat.settings_for(user.scope))
+
+
+@router.put("/api/chat/context/budget")
+async def update_context_budget(budget: ContextBudgetInput, request: Request) -> ContextUsage:
+    """保存当前管理员自己的上下文总预算。
+
+    Args:
+        budget: 严格校验的整数预算，不接受其他账号信息。
+        request: 携带已验证身份和会话服务的请求。
+
+    Returns:
+        下一轮生效的预算配置。
+
+    Raises:
+        HTTPException: 未登录或非管理员。
+        AgentError: 非开发模式或预算没有留下输入空间。
+        OSError: 保存失败。
+    """
+    user = current_user(request)
+    require_owner(request, user.uid, admin=True)
+    return context_usage(request.app.state.chat.update_context_budget(user.scope, budget.context_limit))

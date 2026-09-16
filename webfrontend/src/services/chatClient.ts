@@ -217,3 +217,29 @@ export async function streamChatRun(id: string, signal: AbortSignal, onUpdate: (
 export async function resetChatContext(): Promise<SessionView> {
   return parseSession(await request('/api/chat/context/reset', { method: 'POST' }));
 }
+
+/**
+ * 读取管理员当前账号下一轮使用的预算配置。
+ * @returns 已校验的预算配置。
+ * @throws 网络、权限或响应结构错误。
+ */
+export async function loadContextBudget(): Promise<ContextUsage> {
+  const budget = parseContextUsage(await request('/api/chat/context/budget'));
+  if (!budget) throw new Error('缺少预算配置');
+  return budget;
+}
+
+/**
+ * 保存当前管理员账号的总预算，下一轮对话生效。
+ * @param contextLimit - 包括回复预留和格式余量的总额度。
+ * @returns 服务端确认保存的预算配置。
+ * @throws 网络、权限、预算校验或保存失败。
+ */
+export async function saveContextBudget(contextLimit: number): Promise<ContextUsage> {
+  const budget = parseContextUsage(await request('/api/chat/context/budget', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ context_limit: contextLimit }),
+  }));
+  if (!budget) throw new Error('缺少预算配置');
+  return budget;
+}

@@ -295,3 +295,7 @@ Prompt bundle 对应 `OPEN-10`，spec 治理与首个交付对应 `OPEN-11`。�
 ## 2026-09-14 WebApp 鉴权目录修订
 
 账号认证、密码验证、登录会话和 HTTP 权限检查统一归 `webapp/auth/`，按服务、依赖、路由和中间件分文件。`backend/` 不承载鉴权实现，Agent 内核继续只接收已确认的账号归属。账号 MySQL 读写仍归存储层，具体职责见 [账号鉴权与日志 Console](accounts-and-console.md)。
+
+## 2026-09-14 WebApp 通信与展示层合并修订
+
+用户确认移除根目录 `backend/`。前端交互的服务端通信、输入校验、展示转换、Console 日志读取和界面配置资源存储统一放在 `webapp/`。其中 `chat_service.py` 承接对话输入与视图转换，`console_log.py` 承接日志读取，`ui_store.py` 承接界面资源存储；现有 HTTP 路由保持轻量，Agent 执行仍委托 `src/tidebound/runtime/`。此修订覆盖前述迁移阶段将通信与展示适配拆在两个根目录的约定，不保留旧导入兼容包。

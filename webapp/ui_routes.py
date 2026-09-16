@@ -5,8 +5,8 @@ from fastapi.responses import FileResponse
 from pydantic import JsonValue
 from starlette.datastructures import UploadFile
 
-from backend.ui_store import UiStore
 from webapp.auth.dependencies import current_user
+from webapp.ui_store import UiStore
 
 router = APIRouter()
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024

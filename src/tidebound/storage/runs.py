@@ -3,9 +3,15 @@ import os
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.tidebound.runtime.types import RunRecord
+
+
+class ContextBudget(BaseModel):
+    """账号自己的上下文总预算覆盖值。"""
+
+    context_limit: int = Field(ge=2048, strict=True)
 
 
 class ContextState(BaseModel):
@@ -105,3 +111,44 @@ class RunStore:
         finally:
             temporary.unlink(missing_ok=True)
         return state.timeline_id
+
+    def load_context_budget(self, owner: str) -> ContextBudget | None:
+        """读取账号预算覆盖，没有配置时沿用服务端默认值。
+
+        Args:
+            owner: 经鉴权确定的账号内部范围。
+
+        Returns:
+            已保存的预算；首次配置前为空。
+
+        Raises:
+            OSError: 文件无法读取。
+            ValueError: 保存的预算格式损坏。
+        """
+        path = self.root / UUID(owner).hex / "state" / "budget.json"
+        try:
+            return ContextBudget.model_validate_json(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+
+    def save_context_budget(self, owner: str, budget: ContextBudget) -> None:
+        """原子保存账号预算，独立于时间线重置。
+
+        Args:
+            owner: 经鉴权确定的账号内部范围。
+            budget: 已校验的账号上下文预算。
+
+        Raises:
+            OSError: 保存失败，不宣称已应用配置。
+        """
+        directory = self.root / UUID(owner).hex / "state"
+        directory.mkdir(parents=True, exist_ok=True)
+        temporary = directory / f".{uuid4().hex}.tmp"
+        try:
+            with temporary.open("x", encoding="utf-8") as output:
+                output.write(budget.model_dump_json())
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, directory / "budget.json")
+        finally:
+            temporary.unlink(missing_ok=True)

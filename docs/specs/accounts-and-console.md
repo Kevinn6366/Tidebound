@@ -4,9 +4,11 @@
 
 ## 目录与运行范围
 
-`src/tidebound/` 包含 runtime、context、tools、storage、memory、workflows、sandbox，以及模型、提示词加载、配置、错误和调试模块。memory、workflows、sandbox 仍为空职责目录，不表示能力已实现。根目录 `backend/` 负责应用编排与展示转换，`webapp/` 负责 FastAPI 通信与身份权限边界。认证、密码校验、登录会话、权限依赖及 HTTP 鉴权中间件统一放在 `webapp/auth/`，不在 `backend/` 中另设鉴权实现。
+`src/tidebound/` 包含 runtime、context、tools、storage、memory、workflows、sandbox，以及模型、提示词加载、配置、错误和调试模块。memory、workflows、sandbox 仍为空职责目录，不表示能力已实现。`webapp/` 统一负责前端交互的服务端通信、输入校验、展示转换、日志读取、界面资源存储与身份权限边界，不再保留根目录 `backend/`。认证、密码校验、登录会话、权限依赖及 HTTP 鉴权中间件统一放在 `webapp/auth/`，不在 `backend/` 中另设鉴权实现。
 
 `webapp/auth/service.py` 管理密码验证和登录会话，`dependencies.py` 校验当前身份与账号权限，`routes.py` 提供账号 HTTP 接口，`middleware.py` 处理请求认证、私有入口及跨来源限制。MySQL 账号数据读写仍由 `src/tidebound/storage/users.py` 负责；数据访问层不承担 HTTP 鉴权。
+
+`webapp/chat.py` 保留轻量 HTTP 路由，`chat_service.py` 负责对话输入模型和运行结果视图转换，执行仍委托 Agent runtime；`console_log.py` 读取固定开发日志，`ui_store.py` 保存账号隔离的界面配置与媒体资源。
 
 当前仍是本地单进程、单 worker dev。账号改为 MySQL 持久化；聊天执行记录仍按内部归属 UUID 保存于 `data/agent/<scope>/`。不自动将旧匿名 Cookie 的历史绑定到新账号。
 
@@ -71,10 +73,19 @@ Console 对应 `tail -n 100 -f data/agent-debug.log` 的页面版本，每秒串
 
 ## 管理员 Dev 工具箱与上下文重置
 
-当前账号仅有 user/admin 两种角色；开发环境中的管理员在主界面侧边显示半透明悬浮“Dev 工具箱”，目前仅有“清空上下文”。普通账号不显示，`POST /api/chat/context/reset` 也必须由服务端验证 admin，目标固定为登录账号自身，不接受其他 UID/scope。
+当前账号仅有 user/admin 两种角色；开发环境中的管理员在主界面侧边显示半透明悬浮“Dev 工具箱”，提供“清空上下文”和“上下文总预算”。普通账号不显示，`POST /api/chat/context/reset` 也必须由服务端验证 admin，目标固定为登录账号自身，不接受其他 UID/scope。
 
 清空操作为当前账号创建新的有效时间线，停止并等待已有执行退出；之后的请求仅包含角色、当前输入、工具声明及按规则触发的一次性注入，不再携带旧对话。旧 Run 与 Console 请求快照保留供审计，重置不会重放工具、删除账号或修改角色与模型配置。此功能是开发调试的“从头开始”，不是任意历史轮次回退或已实现的记忆恢复。
 
 时间线标识原子保存于 `data/agent/<scope>/state/context.json`，新 Run 保存对应标识；旧记录兼容初始时间线。会话展示、历史选取与预算展示只读取当前时间线。停止信号及提交前时间线检查阻止旧执行回写；同一账号重置等待期间拒绝新发送，旧 Run ID 不能再次提交到新时间线。重启后仍保持空历史或重置后的新对话，其他账号不受影响。
 
 前端重置成功后撤掉流式预览、清空展示历史和草稿、恢复初始预算状态；旧订阅和未完成的发送轮询不能恢复旧消息。当前是本地单 worker dev 语义，不宣称支持跨进程协调。
+
+
+### Dev 上下文预算调整（2026-09-16）
+
+会话中的上下文预算圆环点击后展开明细弹窗；鼠标移出圆环及弹窗区域后自动收起，移入弹窗查看明细时保持展开。触屏与键盘仍可通过圆环切换展开状态。
+
+工具箱中的“上下文总预算”默认收起，点击标题展开或收起输入与保存区域。管理员通过 `GET/PUT /api/chat/context/budget` 读取和保存自身的总预算，接口不接受其他账号范围；写入仅在 dev 开放。预算必须为不小于 2,048 的整数，且大于当前回复预留与 1,024 格式余量之和。总预算由管理员依据所用模型支持范围设置，不自动探测供应商上限；输入继续按 UTF-8 JSON 字节保守估算。
+
+覆盖值保存于账号运行目录的 `state/budget.json`，未设置时使用服务端 `TIDEBOUND_CONTEXT_LIMIT`。每轮开始时固定配置，修改从下一轮生效，不影响正在执行的请求或其他账号。刷新和服务重启保留设置，清空上下文不清除预算。历史 Run 中的实际用量不改写；当历史统计与当前总预算不同，会话圆环显示新预算与未知输入，直到新请求产生统计。

@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 import type { ContextUsage } from '../services/chatClient';
 
 /**
- * 显示最近模型请求的预算占用圆环，点击查看输入与预留明细。
+ * 显示最近模型请求的预算占用圆环，点击查看明细，鼠标离开圆环及弹窗区域时收起。
  * @param props - 后端统计的预算数据。
  * @param props.usage - 最近实际请求用量或尚未请求的配置。
  * @returns 支持鼠标、触屏和键盘展开的圆环及详情。
@@ -14,7 +14,7 @@ export default function ContextBudgetRing({ usage }: { usage: ContextUsage | nul
   const ratio = known ? Math.min(1, used / usage.total) : 0;
   const color = ratio >= 0.95 ? '#fb7185' : ratio >= 0.8 ? '#fbbf24' : '#a5b4fc';
   const label = percent === null ? '上下文预算：尚无请求用量' : `上下文预算已占用 ${percent}%`;
-  return <details className="context-budget">
+  return <details className="context-budget" onMouseLeave={event => { event.currentTarget.open = false; }}>
     <summary aria-label={label} title={`${label}，点击查看明细`}>
       <svg viewBox="0 0 40 40" aria-hidden="true">
         <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,.16)" strokeWidth="3" />

@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import ContextBudgetSettings from './ContextBudgetSettings';
 
 /**
  * 展示管理员专用的悬浮调试工具仓。
@@ -6,7 +7,7 @@ import type { JSX } from 'react';
  * @param props.resetting - 是否正在清空上下文。
  * @param props.disabled - 提交尚未确认时禁止重置，避免请求先后次序不明。
  * @param props.onReset - 清空当前账号有效上下文的入口。
- * @returns 半透明侧边工具仓，目前仅包含清空上下文。
+ * @returns 半透明侧边工具仓，包含清空上下文和预算调整。
  */
 export default function DevToolbox({ resetting, disabled, onReset }: {
   resetting: boolean;
@@ -21,5 +22,6 @@ export default function DevToolbox({ resetting, disabled, onReset }: {
       </svg>
       {resetting ? '正在清空…' : '清空上下文'}
     </button>
+    <ContextBudgetSettings />
   </aside>;
 }

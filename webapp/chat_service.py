@@ -10,6 +10,13 @@ from src.tidebound.runtime.session import ChatSession
 from src.tidebound.runtime.types import ContextUsage, RunRecord
 
 
+class ContextBudgetInput(BaseModel):
+    """管理员可调整的上下文总预算，不接受账号或模型配置。"""
+
+    model_config = ConfigDict(extra="forbid")
+    context_limit: int = Field(ge=2048, strict=True)
+
+
 class ChatAttachment(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: str
@@ -124,10 +131,11 @@ def session_view(service: ChatSession, owner: str) -> SessionView:
     messages: list[DisplayMessage] = []
     active = None
     tool_runs: list[RunView] = []
-    usage = context_usage(service.settings)
+    configured_usage = context_usage(service.settings_for(owner))
+    usage = configured_usage
     for record in service.records(owner):
         if record.context_usage is not None and record.status in ("running", "completed"):
-            usage = record.context_usage
+            usage = record.context_usage if record.context_usage.total == configured_usage.total else configured_usage
         view = run_view(record)
         if view.tools:
             tool_runs.append(view)

@@ -24,4 +24,4 @@ pythonpath = ["."]
 [tool.ruff]
 target-version = "py311"
 line-length = 120
-include = ["backend/**/*.py", "webapp/**/*.py", "src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+include = ["webapp/**/*.py", "src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]

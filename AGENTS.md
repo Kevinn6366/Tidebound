@@ -4,7 +4,7 @@
 
 先阅读 [宏观架构规格](docs/specs/architecture.md)，再阅读 `docs/specs/` 中与当前任务有关的专项规格。历史讨论保存在 `docs/architecture/discussions/`，以当前有效规格和用户最新确认的要求为准。
 
-- Web 前端放在 `webfrontend/`，FastAPI 通信层放在 `webapp/`，Agent 业务内核放在 `src/tidebound/`；`legacy/gwcpro/` 保留尚未迁移的上游业务，禁止从新应用导入旧 Agent。对话应用输入与展示转换放在根目录 `backend/`，执行委托 `src/tidebound/runtime/`，FastAPI 仍在 `webapp/`。
+- Web 前端放在 `webfrontend/`，FastAPI 通信层放在 `webapp/`，Agent 业务内核放在 `src/tidebound/`；`legacy/gwcpro/` 保留尚未迁移的上游业务，禁止从新应用导入旧 Agent。前端交互的服务端通信、输入校验、展示转换、日志读取和界面资源存储全部放在 `webapp/`，执行委托 `src/tidebound/runtime/`；不再保留根目录 `backend/`。
 - 展示与通信迁移状态、验收范围见 `docs/specs/web-migration.md`；`webfrontend/src/gwc/` 保留完整上游界面与设置，模型执行已移除；`webfrontend/legacy/` 是原始参考，不进入构建或静态发布。
 - FastAPI 负责通信适配；Agent 执行与会话协调归 `src/tidebound/runtime/`，上下文、记忆、工作流、工具和存储按架构规格分别实现。
 - 账号与管理员 console 的认证、登录会话及权限检查统一放在 `webapp/auth/`，不得放在 `backend/`；MySQL 和日志范围见 `docs/specs/accounts-and-console.md`。

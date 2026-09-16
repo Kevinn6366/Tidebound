@@ -1,5 +1,7 @@
 # Web 前端与通信迁移规格
 
+> 当前目录修订：根目录 `backend/` 已移除，原对话适配、日志读取和界面资源存储分别迁至 `webapp/chat_service.py`、`webapp/console_log.py`、`webapp/ui_store.py`；前端交互的服务端代码统一归 `webapp/`。下文旧目录属于迁移阶段记录，以本修订和宏观架构最新修订为准。
+
 > 本文记录展示与通信迁移阶段。v0.01 已将对话空接口替换为 Python Agent loop；请求新增 `run_id`，新增运行查询、停止和服务端历史，具体以 [Agent loop v0.01](agent-loop-v0.01.md) 为准。下文 501 与空实现描述仅对应迁移阶段；未迁移的其他业务仍返回 501。
 
 
@@ -52,3 +54,8 @@ HTTP Cookie 是开发预览的数据范围标识，不代表登录或管理员�
 ## 2026-09-14 账号与日志入口
 
 用户入口改为 `/app/{uid}`；MySQL 账号鉴权与管理员 `/app/{uid}/console` 已接入，覆盖此前预览 Cookie 和未接入账号的描述。Console 当前只读取固定 `data/agent-debug.log`。详见 [账号鉴权与日志 Console](accounts-and-console.md)。
+
+
+## 2026-09-16 请求体接收中断
+
+读取请求体期间的 `ClientDisconnect` 由通信层按 499 请求中断处理，不上报为未处理的 ASGI 服务异常，也不返回保存成功。界面 JSON 配置仍须完整接收和解析后才原子写入，未接收完整的保存请求不得覆盖原配置。此处理不停止已开始的 Agent 执行。

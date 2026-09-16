@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-from backend.chat import session_view
 from src.tidebound.config import AgentSettings
 from src.tidebound.context.budget import select_messages
 from src.tidebound.errors import AgentError
@@ -14,6 +13,7 @@ from src.tidebound.runtime.agent_loop import agent_loop
 from src.tidebound.runtime.session import ChatSession
 from src.tidebound.runtime.types import Message, ModelReply, RunRecord, ToolCall
 from src.tidebound.tools.registry import EmptyArguments, ToolMap, create_tools
+from webapp.chat_service import session_view
 
 
 def tool_reply(name: str = "get_current_time", arguments: str = "{}", finish: str = "tool_calls") -> ModelReply:

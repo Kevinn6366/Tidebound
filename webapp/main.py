@@ -4,7 +4,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from starlette.responses import JSONResponse
+from starlette.requests import ClientDisconnect
+from starlette.responses import JSONResponse, Response
 
 from src.tidebound.config import AgentSettings
 from src.tidebound.errors import AgentError
@@ -51,6 +52,19 @@ def create_app(settings: WebSettings | None = None, agent_settings: AgentSetting
     async def agent_error(_: Request, error: AgentError) -> JSONResponse:
         """将可公开的业务错误转换为通信错误。"""
         return JSONResponse({"detail": {"code": error.code, "message": str(error)}}, status_code=error.status)
+
+    @application.exception_handler(ClientDisconnect)
+    async def client_disconnect(_: Request, error: ClientDisconnect) -> Response:
+        """将读取请求体时的客户端断连标记为中断，避免作为服务故障抛出。
+
+        Args:
+            _: 已经断开的 HTTP 请求，不记录正文或认证信息。
+            error: Starlette 确认读取请求体期间连接已断开的异常。
+
+        Returns:
+            499 中断状态，不返回保存成功；客户端断开后可能无法收到响应。
+        """
+        return Response(status_code=499)
 
     application.middleware("http")(authenticate)
 

@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from src.tidebound.config import AgentSettings
+from src.tidebound.context.budget import FORMAT_MARGIN
 from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ChatCompletionsClient, ModelClient
@@ -15,7 +16,7 @@ from src.tidebound.runtime.agent_loop import agent_loop
 from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.types import ContextUsage, Message, RunRecord
 from src.tidebound.storage.model_requests import request_run
-from src.tidebound.storage.runs import RunStore
+from src.tidebound.storage.runs import ContextBudget, RunStore
 from src.tidebound.tools.registry import create_tools
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,45 @@ class ChatSession:
         self.active: dict[str, ActiveRun] = {}
         self.resetting: set[str] = set()
         ZoneInfo(settings.timezone)
+
+    def settings_for(self, owner: str) -> AgentSettings:
+        """构造账号下一轮使用的配置快照。
+
+        Args:
+            owner: 当前账号内部范围。
+
+        Returns:
+            合并持久化预算后的独立配置，不修改全局配置。
+
+        Raises:
+            OSError: 无法读取预算。
+            ValueError: 保存的配置损坏。
+        """
+        budget = self.store.load_context_budget(owner)
+        return self.settings.model_copy(update={} if budget is None else {"context_limit": budget.context_limit})
+
+    def update_context_budget(self, owner: str, context_limit: int) -> AgentSettings:
+        """保存下一轮生效的账号预算，当前执行保持开始时的快照。
+
+        Args:
+            owner: 经应用层授权的账号内部范围。
+            context_limit: 包括输入、输出预留与格式余量的总预算。
+
+        Returns:
+            保存后的账号有效配置。
+
+        Raises:
+            AgentError: 非开发模式或预算没有留下输入空间。
+            ValueError: 预算不是合法整数或小于最低值。
+            OSError: 预算保存失败。
+        """
+        if self.settings.mode != "dev":
+            raise AgentError("dev_only", "预算调整仅在开发环境开放。", 403)
+        budget = ContextBudget(context_limit=context_limit)
+        if context_limit <= self.settings.max_output_tokens + FORMAT_MARGIN:
+            raise AgentError("invalid_context_budget", "总预算必须大于回复预留与格式余量之和。", 422)
+        self.store.save_context_budget(owner, budget)
+        return self.settings_for(owner)
 
     @property
     def configured(self) -> bool:
@@ -125,13 +165,14 @@ class ChatSession:
                            user_content=content, prompt_name=bundle.name, timeline_id=timeline_id)
         history = [item.messages for item in records if item.status == "completed"]
         stop = asyncio.Event()
+        settings = self.settings_for(owner)
         self.store.save(owner, record)
-        task = asyncio.create_task(self._execute(owner, record, bundle.content, history, stop))
+        task = asyncio.create_task(self._execute(owner, record, bundle.content, history, stop, settings))
         self.active[owner] = ActiveRun(record, stop, task)
         return record
 
     async def _execute(self, owner: str, record: RunRecord, system: str,
-                       history: list[list[Message]], stop: asyncio.Event) -> None:
+                       history: list[list[Message]], stop: asyncio.Event, settings: AgentSettings) -> None:
         """运行后台任务并在停止资格检查后提交。
 
         Args:
@@ -140,6 +181,7 @@ class ChatSession:
             system: 固定的角色提示词。
             history: 开始时的有效历史。
             stop: 设置后不能提交成功结果的停止信号。
+            settings: 本轮开始时固定的账号配置快照。
         """
         def update_preview(content: str) -> None:
             """更新未提交正文，停止后忽略迟到分片。
@@ -162,8 +204,8 @@ class ChatSession:
         context_token = request_run.set((owner, record.run_id))
         record.messages = [Message(role="user", content=record.user_content)]
         try:
-            async with asyncio.timeout(self.settings.timeout_seconds):
-                await agent_loop(system, history, record.messages, self.model, self.settings, stop, self.tools, update_context)
+            async with asyncio.timeout(settings.timeout_seconds):
+                await agent_loop(system, history, record.messages, self.model, settings, stop, self.tools, update_context)
             if stop.is_set() or record.timeline_id != self.store.current_timeline(owner):
                 raise AgentError("run_stopped", "本次回复已停止。")
             record.status = "completed"
