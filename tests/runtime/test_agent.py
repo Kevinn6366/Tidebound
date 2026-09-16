@@ -34,6 +34,57 @@ def final_reply() -> ModelReply:
     return ModelReply(message=Message(role="assistant", content="已读取时间。"), finish_reason="stop")
 
 
+def test_system_safety_and_log_final_reply_only(tmp_path: Path) -> None:
+    """验证常驻安全规则覆盖工具前后请求，过渡正文只留在执行审计中。
+
+    Args:
+        tmp_path: 隔离的执行记录目录。
+    """
+    from src.tidebound.config import ROOT
+    from src.tidebound.prompting import load_prompt_bundles
+
+    async def scenario() -> None:
+        """执行带过渡正文的工具调用，再检查页面历史及重启恢复。"""
+        systems: list[str] = []
+
+        class CapturingModel(ScriptedModel):
+            async def complete(self, system: str, messages: list[Message],
+                               tools: list[dict[str, object]]) -> ModelReply:
+                """记录实际 system 并返回预设响应。
+
+                Args:
+                    system: 主请求组装后的常驻与临时规则。
+                    messages: 当前请求的对话及工具链。
+                    tools: 当前允许的工具声明。
+
+                Returns:
+                    本次调用的受控模型响应。
+                """
+                systems.append(system)
+                return await super().complete(system, messages, tools)
+
+        transition = tool_reply()
+        transition.message.content = "我来看看……"
+        model = CapturingModel([transition, final_reply()])
+        settings = AgentSettings(base_url="http://model.test/v1", model="fixture", data_dir=tmp_path)
+        service = ChatSession(settings, model)
+        owner, run_id = uuid4().hex, str(uuid4())
+        service.start(owner, run_id, "现在几点？")
+        await service.active[owner].task
+        safety = load_prompt_bundles(ROOT / "prompts", ("chat.safety",)).content
+        assert len(systems) == 2
+        assert all(system.count(safety) == 1 for system in systems)
+        assert "先获取当前时间再回答" not in systems[0]
+        assert "先获取当前时间再回答" in systems[1]
+        assert service.get(owner, run_id).messages[1].content == "我来看看……"
+        for current in (service, ChatSession(settings, model)):
+            view = session_view(current, owner)
+            assert [message.content for message in view.messages] == ["现在几点？", "已读取时间。"]
+            assert view.tool_runs[0].tools[0].result
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("name,args,error", [("get_current_time", "{}", None), ("missing", "{}", "unknown_tool"),
     ("get_current_time", '{"unexpected":1}', "invalid_arguments"), ("get_current_time", "bad-json", "invalid_arguments")])
 def test_tool_results_feed_model(name: str, args: str, error: str | None) -> None:

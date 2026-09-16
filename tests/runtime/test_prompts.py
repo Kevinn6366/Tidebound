@@ -6,7 +6,7 @@ import pytest
 
 from src.tidebound.config import ROOT
 from src.tidebound.errors import AgentError
-from src.tidebound.prompting import load_character_bundle
+from src.tidebound.prompting import load_character_bundle, load_chat_system
 
 
 def test_replaced_directory_changes_content(tmp_path: Path) -> None:
@@ -16,6 +16,25 @@ def test_replaced_directory_changes_content(tmp_path: Path) -> None:
     assert "{{" not in original.content
     original.files[0].write_text("替换后的角色内容", encoding="utf-8")
     assert load_character_bundle(root).content == "替换后的角色内容"
+
+
+def test_chat_safety_is_required_and_independent(tmp_path: Path) -> None:
+    """验证替换角色不删除安全约定，缺失安全包时主对话不能静默降级。
+
+    Args:
+        tmp_path: 隔离的提示词根目录。
+    """
+    root = tmp_path / "prompts"
+    shutil.copytree(ROOT / "prompts", root)
+    safety = root / "master/chat.safety/chat.safety-zh.md"
+    safety.write_text("SAFETY_SENTINEL", encoding="utf-8")
+    load_character_bundle(root).files[0].write_text("NEW_CHARACTER", encoding="utf-8")
+    assert load_character_bundle(root).content == "NEW_CHARACTER"
+    assert load_chat_system(root).content == "NEW_CHARACTER\n\nSAFETY_SENTINEL"
+    safety.unlink()
+    assert load_character_bundle(root).content == "NEW_CHARACTER"
+    with pytest.raises(AgentError, match="提示词"):
+        load_chat_system(root)
 
 
 @pytest.mark.parametrize("change", ["duplicate", "purpose", "escape", "template", "missing", "empty"])

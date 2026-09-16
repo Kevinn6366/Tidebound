@@ -82,6 +82,21 @@ def load_character_bundle(root: Path) -> PromptBundle:
     return load_prompt_bundles(root, ("chat.character",))
 
 
+def load_chat_system(root: Path) -> PromptBundle:
+    """分别加载角色与常驻系统安全约定，组装主对话的初始 system。
+
+    Args:
+        root: 同时包含角色和系统安全 bundle 的提示词根目录。
+
+    Returns:
+        按角色、安全约定顺序组合的正文和文件来源，名称沿用角色包。
+
+    Raises:
+        AgentError: 任一必需 bundle 缺失或不合法。
+    """
+    return load_prompt_bundles(root, ("chat.character", "chat.safety"))
+
+
 def load_tool_injections(root: Path, purposes: tuple[str, ...]) -> str:
     """加载本批工具调用对应的临时规则，供下一次模型请求使用。
 
@@ -121,7 +136,7 @@ def load_prompt_bundles(root: Path, purposes: tuple[str, ...]) -> PromptBundle:
             (root / "master.yaml").read_text(encoding="utf-8"), Loader=UniqueKeyLoader,
         ))
         if "chat.character" not in manifest.prompts or any(
-            purpose not in {"chat.character", "context.compaction", "context.injection.summary"}
+            purpose not in {"chat.character", "chat.safety", "context.compaction", "context.injection.summary"}
             and not purpose.startswith("tools.injection.")
             for purpose in manifest.prompts
         ):

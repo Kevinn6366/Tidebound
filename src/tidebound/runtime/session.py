@@ -12,7 +12,7 @@ from src.tidebound.context.compaction import PreparedContext
 from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ChatCompletionsClient, ModelClient
-from src.tidebound.prompting import load_character_bundle
+from src.tidebound.prompting import load_chat_system
 from src.tidebound.runtime.agent_loop import agent_loop
 from src.tidebound.runtime.compaction import CompactionCoordinator
 from src.tidebound.runtime.preview import preview_sink
@@ -80,7 +80,7 @@ class ChatSession:
             return None
         settings = self.settings_for(owner)
         prepared, _ = self.compaction.read_context(owner, timeline,
-            load_character_bundle(settings.prompts_dir).content, records, [], tool_definitions(self.tools), settings)
+            load_chat_system(settings.prompts_dir).content, records, [], tool_definitions(self.tools), settings)
         return context_usage(settings, prepared.input_used)
 
     async def compact_context(self, owner: str) -> ContextUsage:
@@ -106,7 +106,7 @@ class ChatSession:
         previous = self.compaction.summaries.load(owner, timeline, [item.run_id for item in records])
         if not records or (previous and len(previous.covered_run_ids) >= len(records)):
             raise AgentError("nothing_to_compact", "暂无新增的已完成对话可压缩。", 409)
-        task = self.compaction.schedule(owner, timeline, load_character_bundle(settings.prompts_dir).content,
+        task = self.compaction.schedule(owner, timeline, load_chat_system(settings.prompts_dir).content,
             records, [], tool_definitions(self.tools), settings, records[-1].run_id, trigger="manual")
         if task is None:
             raise AgentError("compaction_unavailable", "整理服务正在关闭，请稍后重试。", 503)
@@ -225,7 +225,7 @@ class ChatSession:
         url = urlsplit(self.settings.base_url)
         if not self.configured or url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
             raise AgentError("model_not_configured", "请在后端 .env 配置模型服务地址、模型名和所需凭据。", 503)
-        bundle = load_character_bundle(self.settings.prompts_dir)
+        bundle = load_chat_system(self.settings.prompts_dir)
         record = RunRecord(run_id=run_id, created_at=datetime.now(UTC).isoformat(),
                            user_content=content, prompt_name=bundle.name, timeline_id=timeline_id)
         history = [item for item in records if item.status == "completed"]
