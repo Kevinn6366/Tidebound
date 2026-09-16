@@ -1,0 +1,31 @@
+{
+  "status": "passed",
+  "source_sha256_before": "811d14cef99845dcd1de7d9d22f091e9d40e9c65dc96ec6fb0bf6392e33f065d",
+  "source_sha256_after": "811d14cef99845dcd1de7d9d22f091e9d40e9c65dc96ec6fb0bf6392e33f065d",
+  "physical_lines": 2287,
+  "parsed": 2253,
+  "unique": 2012,
+  "main_reviewed": 120,
+  "auxiliary_reviewed": 23,
+  "reserved": 201,
+  "unreviewed_analysis": 1668,
+  "hypotheses": 9,
+  "evidence_quotes_checked": 508,
+  "report_full_field_quotes_checked": 78,
+  "checks": [
+    "逐物理行解析状态与隔离原文",
+    "精确重复及代表行",
+    "关联组不跨划分",
+    "预留未用于证据或反证检索",
+    "每条证据全部原始字段",
+    "引文逐字存在",
+    "候选和证据双向链接",
+    "覆盖计数",
+    "输入前后哈希"
+  ],
+  "limits": [
+    "机械验证不等于人格结论正确或原作事实核验",
+    "未识别的跨模板近重复仍可能泄漏",
+    "本轮之后等待用户讨论"
+  ]
+}
