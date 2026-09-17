@@ -241,7 +241,9 @@ def test_injection_only_follows_tool_call_and_does_not_enter_history(tmp_path: P
 
     async def scenario() -> None:
         model = InspectingModel()
-        service = ChatSession(AgentSettings(base_url="http://fixture", model="test", data_dir=tmp_path), model)
+        # 本用例验证多步注入，预算留足空间，避免角色文案变化触发压缩。
+        service = ChatSession(AgentSettings(base_url="http://fixture", model="test", data_dir=tmp_path,
+                                            context_limit=32768), model)
         owner, run_id = uuid4().hex, str(uuid4())
         service.start(owner, run_id, "现在几点")
         await service.active[owner].task
