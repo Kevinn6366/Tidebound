@@ -16,7 +16,7 @@ test('100-call experiment ring reflects measured before and after occupancy', as
   expect(registered.status()).toBe(201);
   let usage = { total: 32768, input_used: 0, output_reserved: manifest.main_output_reserved, format_margin: 1024 };
   await page.route('**/api/chat/session', route => route.fulfill({ json: {
-    character: 'atri', character_name: '亚托莉', messages: [], active_run: null, tool_runs: [], context_usage: usage,
+    timezone: 'Asia/Shanghai', meet_run: null, character: 'atri', character_name: '亚托莉', messages: [], active_run: null, tool_runs: [], context_usage: usage,
   } }));
   await page.goto('/app/');
   await page.getByRole('button', { name: 'START', exact: true }).click();

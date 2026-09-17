@@ -14,6 +14,8 @@ class ToolCall(BaseModel):
 class Message(BaseModel):
     role: Literal["user", "assistant", "tool"]
     content: str = ""
+    created_at: str | None = None
+    time_estimated: bool = False
     reasoning_content: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
@@ -36,6 +38,11 @@ class ContextUsage(BaseModel):
 class RunRecord(BaseModel):
     run_id: str
     created_at: str
+    completed_at: str | None = None
+    display_started_at: str | None = None
+    display_revision: int = 0
+    track_display_time: bool = False
+    kind: Literal["chat", "meet"] = "chat"
     timeline_id: str = ""
     status: Literal["running", "completed", "stopped", "failed", "interrupted"] = "running"
     user_content: str

@@ -111,3 +111,7 @@ manifest 校验覆盖 purpose 范围、语言、变体和名称唯一性；正�
 `load_chat_system()` 分别加载 `chat.character` 与 `chat.safety`，按此顺序组合成初始 system；两者在 Run 开始时固定，每次主模型请求均携带。角色单独加载不包含安全正文。安全 bundle 缺失或非法时明确失败，不静默降级。当前迁移已有能力保密规则，不新增工具授权机制。
 
 聊天、主动压缩规划及空闲预算展示均使用完整初始 system 计量，避免漏算常驻安全内容。压缩模型仍只接收自己的工作流提示词与历史材料，不接收角色或主对话安全正文。临时工具规则仍只生效一次。
+
+## 2026-09-17 欢迎工作流注入
+
+`chat.meet` 注册于同一 master.yaml，正文位于 `master/chat.meet/chat.meet-zh.md`。欢迎工作流必须同时加载 `chat.character` 和 `chat.safety`，再注入 `chat.meet`；所有材料均参与预算。动态见面事件只作为此次请求资料，欢迎最终正文作为 assistant 消息立即提交，临时规则不沿用到普通对话。详见 [登录问候与对话时间](welcome-meet.md)。

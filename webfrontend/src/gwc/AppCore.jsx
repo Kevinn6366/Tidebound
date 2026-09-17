@@ -1,3 +1,4 @@
+import { formatMessageTime } from '../services/chatClient';
 import { useAgentChat } from '../hooks/useAgentChat';
 import { useStreamingText } from '../hooks/useStreamingText';
 import ContextBudgetRing from '../components/ContextBudgetRing';
@@ -2066,7 +2067,8 @@ export default function AppCore({ router }) {
   const activeSession = useMemo(() => ({ id: 'atri', title: '与亚托莉的对话', messages: agentChat.session.messages }), [agentChat.session.messages]);
   const activeRun = agentChat.session.active_run;
   const latestMessage = activeRun ? { id: `${activeRun.run_id}:assistant`, role: 'assistant',
-    content: activeRun.preview, isStreaming: true } : activeSession?.messages?.[activeSession.messages.length - 1];
+    content: activeRun.preview, isStreaming: true, display_pending: activeRun.display_pending,
+    display_revision: activeRun.display_revision } : activeSession?.messages?.[activeSession.messages.length - 1];
 
   const triggerShortcut = (id, defaultAction, e) => {
       if (typeof window.triggerShortcut === 'function') {
@@ -2149,7 +2151,16 @@ export default function AppCore({ router }) {
 
   const pages = latestMessage ? getPages(latestMessage.content) : [""];
   const currentDisplay = pages[vnPage] || pages[pages.length - 1] || "";
-  const streamedDisplay = useStreamingText(currentDisplay, `${latestMessage?.id}:${vnPage}`, Boolean(latestMessage?.isStreaming));
+  const streamedDisplay = useStreamingText(appMode === 'game' ? currentDisplay : '', `${appMode}:${latestMessage?.id}:${vnPage}`, Boolean(latestMessage?.isStreaming || latestMessage?.kind === 'meet'));
+  // 标题页后台订阅不等于展示；只有聊天区真正开始逐字呈现时才确认时间。
+  const displayMessageId = latestMessage?.role === 'assistant' ? latestMessage.id : null;
+  const displayRevision = latestMessage?.display_revision ?? 0;
+  const displayPending = Boolean(latestMessage?.display_pending);
+  const hasVisibleReply = appMode === 'game' && !activePluginUI && Boolean(streamedDisplay) && currentDisplay.startsWith(streamedDisplay);
+  const markDisplayed = agentChat.markDisplayed;
+  useEffect(() => {
+    if (hasVisibleReply && displayPending && displayMessageId) void markDisplayed(displayMessageId, displayRevision);
+  }, [hasVisibleReply, displayPending, displayMessageId, displayRevision, markDisplayed]);
   const hasNextPage = vnPage < pages.length - 1;
 
   const handleDialogClick = () => { if (hasNextPage) setVnPage(prev => prev + 1); };
@@ -2891,7 +2902,8 @@ export default function AppCore({ router }) {
       `}} />
  
       {getSessionUser()?.role === 'admin' && <DevToolbox resetting={agentChat.resetting}
-        disabled={agentChat.busy && !agentChat.session.active_run} onReset={handleResetContext} />}
+        disabled={agentChat.busy && !agentChat.session.active_run} busy={agentChat.busy}
+        onTestMeet={agentChat.testMeet} onReset={handleResetContext} />}
 
  {/* ✨ 新增：全局备份与恢复进度条 (左上角悬浮) */}
       {backupProgress.visible && (
@@ -3191,10 +3203,12 @@ export default function AppCore({ router }) {
                             ))}
                         </div>
                     )}
-                    {agentChat.error && <p role="alert" className="text-red-200 text-sm">{agentChat.error}</p>}
+                    {agentChat.error && <p role="alert" className="text-red-200 text-sm">{agentChat.error}
+                      {!agentChat.busy && agentChat.canRetryMeet && <button onClick={() => agentChat.retryMeet()} className="ml-3 underline">重试问候</button>}
+                    </p>}
                     {agentChat.busy && <div className="flex items-center justify-between text-white/80 text-sm mb-2">
                       <span role="status">{agentChat.session.active_run?.phase === 'compacting'
-                        ? '正在整理上下文…' : '亚托莉正在回复…'}</span>
+                        ? '正在整理上下文…' : agentChat.session.active_run?.kind === 'meet' ? '正在准备问候…' : '亚托莉正在回复…'}</span>
                       <button aria-label="停止回复" onClick={() => agentChat.stop().catch(error => showToast(error.message, 'error'))} className="px-3 py-1 rounded bg-white/15">停止</button>
                     </div>}
                     <div className={`flex items-center w-full ${settings.enableMobileUI ? 'gap-1.5 md:gap-3' : 'gap-3'}`}>
@@ -3616,9 +3630,10 @@ export default function AppCore({ router }) {
           <div className="flex-1 overflow-y-auto p-8 lg:px-32 space-y-6">
 
             {activeSession?.messages?.map((msg, idx) => (
-              <div key={idx} className={`flex flex-col group ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+              <div key={msg.id || idx} className={`flex flex-col group ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div className="flex items-center gap-2 mb-1">
                    <span className="text-xs text-white/40">{msg.role === 'user' ? settings.userName : '亚托莉'}</span>
+                   {msg.created_at && <time dateTime={msg.created_at} className="text-xs text-white/40" title={agentChat.session.timezone}>{msg.time_estimated ? '约 ' : ''}{formatMessageTime(msg.created_at, agentChat.session.timezone)}</time>}
                    <button onClick={() => handleCopyMessage(msg.content)} className="opacity-0 group-hover:opacity-100 text-white/30 hover:text-white transition-all cursor-pointer" title="复制此段对话"><Copy size={12}/></button>
                 </div>
                 <div className={`max-w-[80%] rounded-xl px-5 py-3 text-lg leading-relaxed select-text cursor-text ${msg.role === 'user' ? 'bg-emerald-900/60 text-emerald-50 border border-emerald-500/30 rounded-tr-sm' : `bg-indigo-900/40 text-indigo-50 border border-indigo-500/30 rounded-tl-sm ${msg.isError ? 'border-red-500 text-red-300' : ''}`}`}>

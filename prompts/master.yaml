@@ -36,3 +36,10 @@ prompts:
           name: tools.injection.timetools-zh
           segments:
             - content: "@master/tools.injection/tools.injection.timetools.md"
+  chat.meet:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: chat.meet-zh
+          segments:
+            - content: "@master/chat.meet/chat.meet-zh.md"

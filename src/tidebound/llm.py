@@ -23,7 +23,7 @@ def wire_messages(system: str, messages: list[Message]) -> list[dict[str, object
         messages: 已完成预算选取的历史与本轮消息。
 
     Returns:
-        保持工具调用 ID 关联的请求消息列表。
+        保持原始正文和工具调用 ID 关联；展示时间仅保存在元数据中。
     """
     result: list[dict[str, object]] = [{"role": "system", "content": system}]
     for message in messages:

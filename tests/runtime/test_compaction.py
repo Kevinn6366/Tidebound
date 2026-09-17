@@ -243,6 +243,8 @@ def test_background_finishes_after_main_reply_and_reset_discards_late_result(tmp
     """
     async def scenario() -> None:
         settings = make_settings(tmp_path)
+        # 保持本测试处于软阈值区间，容纳常驻安全规则及消息时间元数据。
+        settings = settings.model_copy(update={"context_limit": 18432})
         waiting = WaitingSummary()
         class MainModel:
             async def complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:

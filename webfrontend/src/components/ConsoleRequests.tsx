@@ -77,19 +77,19 @@ export default function ConsoleRequests({ uid }: { uid: string }): JSX.Element {
       <div className="console-run-list">
         {runs.length === 0 && <p>暂无记录，新对话会显示在这里。</p>}
         {runs.map(run => <button key={`${run.owner}:${run.run_id}`} onClick={() => openRun(run)}>
-          <strong>{run.user_content || '未记录输入'}</strong>
+          <strong>{run.user_content || (run.requests.some(request => request.purpose === 'chat.meet') ? '登录问候' : '未记录输入')}</strong>
           <span>{new Date(run.created_at).toLocaleString()} · {run.requests.length} 次模型请求</span>
           <small>Run {run.run_id.slice(0, 8)} · 归属 {run.owner}</small>
         </button>)}
       </div>
     </> : <>
       <button onClick={() => { setSelectedRun(null); setSelected(''); }}>返回对话列表</button>
-      <h3 className="console-run-title">{activeRun.user_content || '未记录输入'}</h3>
+      <h3 className="console-run-title">{activeRun.user_content || (activeRun.requests.some(request => request.purpose === 'chat.meet') ? '登录问候' : '未记录输入')}</h3>
       <p>{new Date(activeRun.created_at).toLocaleString()} · {activeRun.requests.length} 次模型请求</p>
       <nav className="console-call-menu" aria-label="本轮模型请求">
         {activeRun.requests.map(request => <button key={request.request_id}
           aria-pressed={selected === request.request_id} onClick={() => setSelected(request.request_id)}>
-          {request.purpose === 'context.compaction' ? '后台压缩' : '主回复'} · 第 {request.step} 次请求
+          {request.purpose === 'context.compaction' ? '后台压缩' : request.purpose === 'chat.meet' ? '登录问候' : '主回复'} · 第 {request.step} 次请求
         </button>)}
       </nav>
       {detail.id === selected && detail.error && <p role="alert" className="account-error">{detail.error}</p>}

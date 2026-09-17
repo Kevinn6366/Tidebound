@@ -17,6 +17,10 @@ class AgentSettings(BaseModel):
     base_url: str = ""
     api_key: SecretStr = SecretStr("")
     model: str = ""
+    meet_model: str = "glm-5.3-flash"
+    meet_base_url: str = ""
+    meet_api_key: SecretStr = SecretStr("")
+    meet_timeout_seconds: float = Field(default=30, gt=0, le=120)
     debug: bool = False
     reasoning_effort: Literal["low", "high", "max"] | None = None
     timezone: str = "Asia/Shanghai"
@@ -39,6 +43,10 @@ class AgentSettings(BaseModel):
         """
         load_dotenv(ROOT / ".env", override=False)
         fields = {
+            "meet_model": "TIDEBOUND_MEET_MODEL",
+            "meet_base_url": "TIDEBOUND_MEET_BASE_URL",
+            "meet_api_key": "TIDEBOUND_MEET_API_KEY",
+            "meet_timeout_seconds": "TIDEBOUND_MEET_TIMEOUT",
             "debug": "TIDEBOUND_DEBUG",
             "reasoning_effort": "TIDEBOUND_LLM_REASONING_EFFORT",
             "mode": "TIDEBOUND_MODE", "base_url": "TIDEBOUND_LLM_BASE_URL",

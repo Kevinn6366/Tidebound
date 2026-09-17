@@ -10,6 +10,13 @@ from src.tidebound.runtime.session import ChatSession
 from src.tidebound.runtime.types import ContextUsage, RunRecord
 
 
+class DisplayStartInput(BaseModel):
+    """展示确认只允许传正文版本，时间由服务端记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=0, strict=True)
+
+
 class ContextBudgetInput(BaseModel):
     """管理员可调整的上下文总预算，不接受账号或模型配置。"""
 
@@ -48,6 +55,12 @@ class ToolResultView(BaseModel):
 
 class RunView(BaseModel):
     run_id: str
+    kind: Literal["chat", "meet"] = "chat"
+    created_at: str
+    completed_at: str | None = None
+    display_started_at: str | None = None
+    display_revision: int = 0
+    display_pending: bool = False
     status: str
     phase: Literal["generating", "compacting"] = "generating"
     tools: list[ToolResultView] = Field(default_factory=list)
@@ -60,12 +73,19 @@ class RunView(BaseModel):
 
 
 class DisplayMessage(BaseModel):
+    display_revision: int = 0
+    display_pending: bool = False
+    created_at: str | None
+    time_estimated: bool = False
+    kind: Literal["chat", "meet"] = "chat"
     id: str
     role: Literal["user", "assistant"]
     content: str
 
 
 class SessionView(BaseModel):
+    timezone: str = "Asia/Shanghai"
+    meet_run: RunView | None = None
     character: Literal["atri"] = "atri"
     character_name: Literal["亚托莉"] = "亚托莉"
     messages: list[DisplayMessage]
@@ -95,7 +115,10 @@ def run_view(record: RunRecord) -> RunView:
                 tool_views.append(view)
         elif message.role == "tool" and message.tool_call_id in pending:
             pending[message.tool_call_id].result = message.content
-    return RunView(run_id=record.run_id, status=record.status, phase=record.phase, reply=reply, tools=tool_views,
+    return RunView(run_id=record.run_id, kind=record.kind, created_at=record.created_at,
+                   completed_at=record.completed_at, display_started_at=record.display_started_at,
+                   display_revision=record.display_revision,
+                   display_pending=record.track_display_time and record.display_started_at is None, status=record.status, phase=record.phase, reply=reply, tools=tool_views,
                    context_usage=record.context_usage, preview=record.preview if record.status == "running" else "", user_content=record.user_content,
                    error_code=record.error_code, error=record.error)
 
@@ -131,6 +154,7 @@ def session_view(service: ChatSession, owner: str) -> SessionView:
     """
     messages: list[DisplayMessage] = []
     active = None
+    meet = None
     tool_runs: list[RunView] = []
     configured_usage = context_usage(service.settings_for(owner))
     usage = configured_usage
@@ -138,15 +162,26 @@ def session_view(service: ChatSession, owner: str) -> SessionView:
         if record.context_usage is not None and record.status in ("running", "completed"):
             usage = record.context_usage if record.context_usage.total == configured_usage.total else configured_usage
         view = run_view(record)
+        if record.kind == "meet":
+            meet = view
+        elif record.status == "completed":
+            meet = None
         if view.tools:
             tool_runs.append(view)
         if record.status == "running":
             active = run_view(record)
         if record.status == "completed":
-            messages.extend([
-                DisplayMessage(id=f"{record.run_id}:user", role="user", content=record.user_content),
-                DisplayMessage(id=f"{record.run_id}:assistant", role="assistant", content=record.messages[-1].content),
-            ])
+            if record.kind == "chat":
+                messages.append(DisplayMessage(id=f"{record.run_id}:user", role="user", content=record.user_content,
+                    created_at=record.created_at))
+            final = record.messages[-1]
+            messages.append(DisplayMessage(id=f"{record.run_id}:assistant", role="assistant", content=final.content,
+                kind=record.kind,
+                created_at=record.display_started_at if record.track_display_time else record.completed_at or record.created_at,
+                display_revision=record.display_revision,
+                display_pending=record.track_display_time and record.display_started_at is None,
+                time_estimated=not record.track_display_time))
     if active is None:
         usage = service.compacted_usage(owner) or usage
-    return SessionView(messages=messages, active_run=active, tool_runs=tool_runs, context_usage=usage)
+    return SessionView(messages=messages, active_run=active, tool_runs=tool_runs, context_usage=usage,
+                       meet_run=meet, timezone=service.settings.timezone)
