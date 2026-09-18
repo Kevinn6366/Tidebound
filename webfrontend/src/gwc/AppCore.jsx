@@ -215,7 +215,7 @@ const DEFAULT_SETTINGS = {
   ttsUrlTemplate: 'http://127.0.0.1:9880/tts?text={text}&text_lang={lang}&ref_audio_path={ref_audio}&prompt_text={ref_text}&prompt_lang={ref_lang}',
   ttsLanguage: 'zh', ttsVolume: 1.0, bgmVolume: 0.3, bgmMode: 'sequential', enableBgmToast: false,
   // ✨ 新增手机端模式开关状态与缩放比例
-  ttsBuiltIn: false, ttsVoiceId: '', enableMobileUI: false, mobileUIScale: 1.0,
+  ttsBuiltIn: false, ttsVoiceId: '', ttsEngine: 'sovits', ttsQwenVoiceId: '', ttsQwenEmotion: 'calm', enableMobileUI: false, mobileUIScale: 1.0,
   storySpriteScale: 1.0, storySpriteX: 0, storySpriteY: 0,
   live2dScale: 0.2, live2dX: 0, live2dY: 0, titleLive2dScale: 0.2, titleLive2dX: 0, titleLive2dY: 0,
   live2dResolution: window.devicePixelRatio || 1, // ✨ 新增：模型渲染分辨率精度
@@ -2463,22 +2463,31 @@ export default function AppCore({ router }) {
 
   const fetchOpenAIModels = async () => { showToast("模型列表接口尚未接入，可保留配置供后续接入", "info"); };
 
+  /**
+   * 在队首音频加载完成后顺序播放，避免未就绪时跳过句子。
+   * @returns 无返回值；推进音频播放队列。
+   */
   const processAudioQueue = useCallback(() => {
     if (isPlayingTTSRef.current || ttsTaskQueueRef.current.length === 0) return;
-    
+
+    // 关键：队首音频若还没加载完成（ready=false），先不播放，等 canplaythrough 回调再来。
+    // 否则 play() 会在音频未就绪时失败，被 catch 跳过 → 丢失该句（新老方案都会丢句的根因）。
+    const head = ttsTaskQueueRef.current[0];
+    if (!head || !head.ready) return;
+
     isPlayingTTSRef.current = true;
     const currentTask = ttsTaskQueueRef.current.shift();
-    
+
     activeAudioRef.current = currentTask.audioObj;
     activeAudioRef.current.volume = ttsVolRef.current;
-    activeAudioRef.current.playbackRate = ttsRateRef.current || 1.0; 
-    
-    activeAudioRef.current.onended = () => { 
-      if (ttsPauseRef.current > 0) { 
-        ttsTimeoutRef.current = setTimeout(() => { isPlayingTTSRef.current = false; processAudioQueue(); }, ttsPauseRef.current); 
-      } else { 
-        isPlayingTTSRef.current = false; processAudioQueue(); 
-      } 
+    activeAudioRef.current.playbackRate = ttsRateRef.current || 1.0;
+
+    activeAudioRef.current.onended = () => {
+      if (ttsPauseRef.current > 0) {
+        ttsTimeoutRef.current = setTimeout(() => { isPlayingTTSRef.current = false; processAudioQueue(); }, ttsPauseRef.current);
+      } else {
+        isPlayingTTSRef.current = false; processAudioQueue();
+      }
     };
 
     activeAudioRef.current.onerror = (e) => {
@@ -2488,43 +2497,93 @@ export default function AppCore({ router }) {
 
     const playPromise = activeAudioRef.current.play();
     if (playPromise !== undefined) {
-        playPromise.catch(e => { 
-          console.warn("TTS 播放被浏览器拦截或失败:", e); 
-          isPlayingTTSRef.current = false; processAudioQueue(); 
+        playPromise.catch(e => {
+          console.warn("TTS 播放被浏览器拦截或失败:", e);
+          isPlayingTTSRef.current = false; processAudioQueue();
         });
     }
   }, []);
 
+  /**
+   * 清理情绪标记并按引擎构造分句音频，等待加载后播放。
+   * @param text - 待朗读文本，可包含上游情绪标签。
+   * @returns 无返回值；添加音频任务，失败时显示提示。
+   */
   const enqueueTTS = useCallback((text) => {
-    if (!settings.ttsEnabled || !settings.ttsUrlTemplate || !text.trim()) return;
+    if (!settings.ttsEnabled || !text.trim()) return;
+
+    // 解析情绪标签 <emotion>标签</emotion>（由回复模型自动输出）
+    let cleanText = text, useEmotion = null;
     try {
-      let url = settings.ttsUrlTemplate
-          .replace('{text}', encodeURIComponent(text.trim()))
-          .replace('{lang}', settings.ttsLanguage);
-
-      if (!settings.ttsRefAudio) {
-          // 未填参考音频：剥离相关参数，让服务端使用自身配置的默认音色
-          // （内置配音由 tts_infer.yaml 指定；外部服务由其自身配置决定）
-          url = url.replace(/([&?])ref_audio_path=\{ref_audio\}/g, '')
-                   .replace(/([&?])prompt_text=\{ref_text\}/g, '')
-                   .replace(/([&?])prompt_lang=\{ref_lang\}/g, '')
-                   .replace(/\?&/, '?').replace(/&$/, '');
+      const em = text.match(/<emotion>\s*([^<]+?)\s*<\/emotion>/i);
+      if (em) {
+        const emotion = em[1].trim();
+        cleanText = text.replace(/<emotion>\s*[^<]+?\s*<\/emotion>/gi, '').trim();
+        useEmotion = emotion || (settings.ttsQwenEmotion && settings.ttsQwenEmotion !== 'calm' ? settings.ttsQwenEmotion : null);
       } else {
-          // 已填参考音频：按原样带入，用于指定音色/克隆
-          url = url.replace('{ref_audio}', encodeURIComponent(settings.ttsRefAudio || ''))
-                   .replace('{ref_text}', encodeURIComponent(settings.ttsRefText || ''))
-                   .replace('{ref_lang}', settings.ttsRefLang || 'zh');
+        useEmotion = (settings.ttsQwenEmotion && settings.ttsQwenEmotion !== 'calm' ? settings.ttsQwenEmotion : null);
       }
-      
-      const preloader = new window.Audio();
-      preloader.preload = 'auto';
-      preloader.src = url;
-      preloader.load(); 
+    } catch (e) { showToast("配音文本处理失败", "error"); return; }
+    if (!cleanText) return;
 
-      ttsTaskQueueRef.current.push({ text, url, audioObj: preloader });
-      processAudioQueue();
-    } catch (error) {}
-  }, [settings, processAudioQueue]);
+    // 单一文本合成并入队（返回是否成功入队）
+    /**
+     * 为单个文本片段预加载音频并追加到顺序队列。
+     * @param seg - 已清理的待朗读片段。
+     * @returns 无返回值；失败时显示提示。
+     */
+    const enqueueSingle = (seg) => {
+      if (!seg) return;
+      try {
+        let url;
+        if (settings.ttsEngine === 'qwen') {
+          const voiceId = settings.ttsQwenVoiceId || settings.ttsVoiceId || '';
+          const params = new URLSearchParams({ text: seg, voice_id: voiceId, ...(useEmotion ? { emotion: useEmotion } : {}) });
+          url = `http://127.0.0.1:9881/tts?${params.toString()}`;
+        } else {
+          if (!settings.ttsUrlTemplate) return;
+          url = settings.ttsUrlTemplate.replace('{text}', encodeURIComponent(seg)).replace('{lang}', settings.ttsLanguage);
+          if (!settings.ttsRefAudio) {
+            url = url.replace(/([&?])ref_audio_path=\{ref_audio\}/g, '').replace(/([&?])prompt_text=\{ref_text\}/g, '')
+                     .replace(/([&?])prompt_lang=\{ref_lang\}/g, '').replace(/\?&/, '?').replace(/&$/, '');
+          } else {
+            url = url.replace('{ref_audio}', encodeURIComponent(settings.ttsRefAudio || ''))
+                     .replace('{ref_text}', encodeURIComponent(settings.ttsRefText || ''))
+                     .replace('{ref_lang}', settings.ttsRefLang || 'zh');
+          }
+        }
+        const preloader = new window.Audio();
+        preloader.preload = 'auto';
+        const task = { text: seg, url, audioObj: preloader, ready: false };
+        // 音频就绪（可播放）后再让它进队播放；加载失败也标记 ready 跳过，避免卡死
+        preloader.addEventListener('canplaythrough', () => { if (!task.ready) { task.ready = true; processAudioQueue(); } });
+        preloader.addEventListener('error', () => { if (!task.ready) { task.ready = true; processAudioQueue(); } });
+        ttsTaskQueueRef.current.push(task);
+        preloader.src = url;
+        preloader.load();
+        processAudioQueue();
+      } catch (e) { showToast("配音音频加载失败", "error"); }
+    };
+
+    // 长文本分句（适度切分：切太细会触发很多次独立推理，GPU 单 worker 串行导致间隔长。
+    // 用较大粒度合句，减少推理次数，同时仍能逐段播放降低首包感知等待）
+    const MIN_SPLIT = 90;   // 低于此长度不切（整段一次推理）
+    if (cleanText.length > MIN_SPLIT) {
+      const parts = cleanText.replace(/\s+/g, ' ').match(/[^。！？!?\n]+[。！？!?\n]?/g) || [cleanText];
+      let chunk = '';
+      const flush = () => { if (chunk.trim()) enqueueSingle(chunk.trim()); chunk = ''; };
+      for (const part of parts) {
+        if (!part.trim()) continue;
+        // 合并短句，尽量凑到 120 字左右再入队，减少推理次数
+        if ((chunk + part).length > 120) { flush(); }
+        chunk += part;
+      }
+      flush();
+      return;
+    }
+
+    enqueueSingle(cleanText);
+  }, [settings, processAudioQueue, showToast]);
   useEffect(() => { enqueueTTSRef.current = enqueueTTS; }, [enqueueTTS]);
 
  const clearTTSQueue = useCallback(() => {

@@ -9,7 +9,7 @@ export const DEFAULT_SETTINGS = {
   userName: '我', aiName: '对象', characterList: [], activeSkillPacks: [], ttsEnabled: false,
   ttsUrlTemplate: 'http://127.0.0.1:9880/tts?text={text}&text_lang={lang}&ref_audio_path={ref_audio}&prompt_text={ref_text}&prompt_lang={ref_lang}',
   ttsLanguage: 'zh', ttsVolume: 1.0, bgmVolume: 0.3, bgmMode: 'sequential', enableBgmToast: false,
-  ttsBuiltIn: false, ttsVoiceId: '', enableMobileUI: false, mobileUIScale: 1.0,
+  ttsBuiltIn: false, ttsVoiceId: '', ttsEngine: 'sovits', ttsQwenVoiceId: '', ttsQwenEmotion: 'calm', enableMobileUI: false, mobileUIScale: 1.0,
   storySpriteScale: 1.0, storySpriteX: 0, storySpriteY: 0,
   live2dScale: 0.2, live2dX: 0, live2dY: 0, titleLive2dScale: 0.2, titleLive2dX: 0, titleLive2dY: 0,
   live2dResolution: typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,

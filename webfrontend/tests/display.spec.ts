@@ -66,6 +66,36 @@ test('原文本设置可以保存并在刷新后恢复', async ({ page }) => {
   await expect(page.getByRole('slider', { name: '主对话框不透明度', exact: true })).toHaveValue('0.85');
 });
 
+test('上游双配音引擎设置可保存，未接入服务明确提示', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/app/');
+  await page.getByRole('button', { name: 'SYSTEM', exact: true }).click();
+  const status = page.waitForResponse('**/api/tts/qwen/status');
+  await page.getByRole('button', { name: '声音设定', exact: true }).click();
+  expect((await status).status()).toBe(501);
+  await expect(page.getByRole('note')).toContainText('尚未接入 TTS');
+  await page.getByText('开启全局 TTS 自动朗读', { exact: false }).locator('..').getByRole('button', { name: 'ON', exact: true }).click();
+  await page.getByText('🎙️ 内置配音', { exact: false }).locator('..').getByRole('button', { name: 'ON', exact: true }).click();
+  await expect(page.getByText('内置配音服务 (GPT-SoVITS)', { exact: true })).toBeVisible();
+  await expect(page.getByText('服务不可用', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '扫描本机 GPT-SoVITS', exact: true })).toHaveCount(0);
+  const saved = page.waitForResponse(response => response.url().endsWith('/core/live2d_settings_v35') && response.request().method() === 'PUT' && response.request().postDataJSON().ttsEngine === 'qwen');
+  await page.getByRole('combobox', { name: '配音引擎' }).selectOption('qwen');
+  expect((await saved).status()).toBe(200);
+  await expect(page.getByText('内置配音服务 (Qwen3-TTS)', { exact: true })).toBeVisible();
+  await expect(page.getByText('该后端功能尚未接入，原界面与配置已保留', { exact: true })).toBeVisible();
+  await page.getByTitle('查看配置文档').click();
+  await expect(page.getByText('📘 Qwen3-TTS 配置文档', { exact: true })).toBeVisible();
+  await expect(page.getByText(/以下为上游 GWC-Pro 配置参考/)).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: 'SYSTEM', exact: true }).click();
+  await page.getByRole('button', { name: '声音设定', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '配音引擎' })).toHaveValue('qwen');
+  await expect(page.getByText('服务不可用', { exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test('原背景上传和备份导出功能可用', async ({ page }) => {
   await page.addInitScript(() => { Object.defineProperty(window, 'showSaveFilePicker', { value: undefined }); });
   await page.goto('/app/');

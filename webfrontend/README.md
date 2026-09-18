@@ -10,5 +10,7 @@
 
 `legacy/` 保留原始参考，不参与运行；`public/vendor/` 保留上游第三方库及许可。原 JSX 不做无关重写，新 TypeScript 使用严格类型检查。
 
+2026-09-18 已适配 GWC-Pro `59428e5` 的前端增量，包括双配音引擎设置及音色/模型管理界面。TTS 服务仍未接入，相关操作显示未接入提示；同步基线与排除项见 [前端迁移规格](../docs/specs/web-migration.md#2026-09-18-上游前端增量同步)。
+
 
 登录入口为 `/app/`，登录后进入 `/app/{uid}`。管理员可进入 `/app/{uid}/console` 查看 `data/agent-debug.log` 末尾 100 行。账号与 MySQL 启动方式见 [账号与 Console 规格](../docs/specs/accounts-and-console.md)。浏览器测试使用 5211、5212、5174 端口；本机已安装 Chrome 时可使用 `PLAYWRIGHT_CHROMIUM_CHANNEL=chrome npm run test:e2e`。
