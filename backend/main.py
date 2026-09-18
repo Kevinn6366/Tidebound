@@ -106,7 +106,7 @@ _ANON_EXACT = {
     "/api/web/search",
     "/admin",
 }
-_ANON_PREFIX = ("/api/kb/",)
+_ANON_PREFIX = ("/api/kb/", "/api/tts/",)
 # 仅管理员可访问
 _ADMIN_PREFIX = ("/api/auth/admin/", "/api/admin/", "/api/server-data/", "/admin/api/")
 
@@ -1683,6 +1683,61 @@ DEFAULT_SOVITS_RUNTIME = r"D:\GPT-SoVITS\GPT-SoVITS-v2pro-20250604\runtime\pytho
 
 _tts_proc = None  # 由本后端拉起的子进程；外部手动启动的服务不在此列
 
+# TTS 进程日志文件目录（供全栈控制台 / API 读取）
+TTS_LOG_DIR = os.path.join(os.path.dirname(BASE_DIR), "userdata", "tts_logs")
+os.makedirs(TTS_LOG_DIR, exist_ok=True)
+
+
+def _tts_log_path(engine="sovits"):
+    """返回指定引擎的日志文件路径。"""
+    return os.path.join(TTS_LOG_DIR, f"tts_{engine}.log")
+
+
+def _open_tts_log(engine="sovits"):
+    """打开（并截断）某引擎的日志文件，供子进程 stdout/stderr 重定向。"""
+    return open(_tts_log_path(engine), "w", encoding="utf-8", buffering=1)
+
+
+def _kill_proc_tree(proc):
+    """终止进程及其整棵子进程树（Windows 用 taskkill /T）。"""
+    if proc is None:
+        return
+    pid = proc.pid
+    if sys.platform == "win32":
+        try:
+            # CREATE_NEW_PROCESS_GROUP 下 terminate 只杀首进程，子进程会变孤儿；
+            # 用 taskkill /F /T 连同子进程树一并终止。
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, timeout=15)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    else:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    # 兜底：确保句柄回收
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def _read_tts_log(engine="sovits", tail=200):
+    """读取某引擎日志文件末尾若干行（供 API / 控制台轮询）。"""
+    p = _tts_log_path(engine)
+    lines = []
+    if os.path.isfile(p):
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        except Exception:
+            pass
+    return lines[-tail:] if len(lines) > tail else lines
+
 
 def _tts_runtime_path():
     """运行时解释器：环境变量 > 启动器配置 > 安装时记录的来源 > 默认路径。"""
@@ -1841,7 +1896,7 @@ async def tts_start():
             [runtime, "api_v2.py", "-a", "127.0.0.1", "-p", str(TTS_PORT),
              "-c", "GPT_SoVITS/configs/tts_infer.yaml"],
             cwd=TTS_SERVER_DIR,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=_open_tts_log("sovits"), stderr=subprocess.STDOUT,
             creationflags=creation,
         )
     except Exception as e:
@@ -1855,11 +1910,7 @@ async def tts_stop():
     global _tts_proc
     if _tts_proc and _tts_proc.poll() is None:
         try:
-            _tts_proc.terminate()
-            try:
-                _tts_proc.wait(timeout=8)
-            except Exception:
-                _tts_proc.kill()
+            _kill_proc_tree(_tts_proc)
         except Exception as e:
             return {"ok": False, "msg": f"停止失败: {e}"}
         _tts_proc = None
@@ -1899,6 +1950,509 @@ async def tts_set_voice(req: Request):
             return r.json()
     except Exception as e:
         return {"ok": False, "msg": f"切换音色失败: {e}"}
+
+
+# --- GPT-SoVITS 模型快速添加（复制 ckpt/pth/参考音频到 tts 目录） ---
+@app.post("/api/tts/sovits/model/add")
+async def sovits_model_add(req: Request):
+    """快速添加 GPT-SoVITS 音色：把用户指定的 ckpt/pth/参考音频复制到 tts 目录，
+    之后 gwc_voices.py 会自动扫描配对。请求体 { name, ckpt, pth, ref_audio, ref_text }。"""
+    import shutil as _sh
+    data = await req.json()
+    name = (data.get("name") or "").strip()
+    ckpt = (data.get("ckpt") or "").strip()
+    pth = (data.get("pth") or "").strip()
+    ref_audio = (data.get("ref_audio") or "").strip()
+    ref_text = (data.get("ref_text") or "").strip()
+
+    if not name:
+        return {"ok": False, "msg": "角色名不能为空"}
+    # 清洗角色名，防路径穿越
+    import re as _re
+    name = _re.sub(r'[^\w\-]', '_', name)
+
+    gpt_dir = os.path.join(TTS_DIR, "models", "gpt")
+    sovits_dir = os.path.join(TTS_DIR, "models", "sovits")
+    ref_dir = os.path.join(TTS_DIR, "ref_audio")
+    for d in (gpt_dir, sovits_dir, ref_dir):
+        os.makedirs(d, exist_ok=True)
+
+    copied = []
+    try:
+        if ckpt and os.path.isfile(ckpt):
+            _sh.copy2(ckpt, os.path.join(gpt_dir, os.path.basename(ckpt)))
+            copied.append("ckpt")
+        if pth and os.path.isfile(pth):
+            _sh.copy2(pth, os.path.join(sovits_dir, os.path.basename(pth)))
+            copied.append("pth")
+        if ref_audio and os.path.isfile(ref_audio):
+            _sh.copy2(ref_audio, os.path.join(ref_dir, os.path.basename(ref_audio)))
+            copied.append("ref_audio")
+        if ref_text:
+            with open(os.path.join(ref_dir, f"{name}_ref.txt"), "w", encoding="utf-8") as f:
+                f.write(ref_text)
+    except Exception as e:
+        return {"ok": False, "msg": f"复制文件失败: {e}"}
+
+    return {"ok": True, "name": name, "copied": copied,
+            "msg": f"已添加音色 {name}（复制了 {', '.join(copied) or '无'}），刷新音色列表即可看到"}
+
+
+# ==========================================================
+# 内置配音（Qwen3-TTS）进程管理 —— 与 GPT-SoVITS 并存
+# 服务目录 tts-qwen3/，监听 9881，独立环境（由一键安装器克隆 backend/runtime，免装 Python）。
+# ==========================================================
+QWEN_TTS_DIR = os.path.join(os.path.dirname(BASE_DIR), "tts-qwen3")
+QWEN_TTS_SERVER_DIR = os.path.join(QWEN_TTS_DIR, "server")
+QWEN_TTS_PORT = 9881
+QWEN_TTS_BASE = f"http://127.0.0.1:{QWEN_TTS_PORT}"
+DEFAULT_QWEN_TTS_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+
+_qwen_tts_proc = None  # 由本后端拉起的子进程；外部手动启动的服务不在此列
+
+
+def _qwen_tts_runtime_path():
+    """运行时解释器：环境变量 > 启动器配置 > 独立环境默认路径。
+
+    独立环境由 qwen_tts_installer 克隆 backend/runtime 而来（embeddable 结构），
+    故 python.exe 位于 env/ 根目录，而非标准 venv 的 env/Scripts/。
+    """
+    env = os.environ.get("GWC_QWEN_TTS_RUNTIME")
+    if env and os.path.isfile(env):
+        return env
+    cfg = _read_launcher_config()
+    p = cfg.get("qwenTtsRuntime")
+    if p and os.path.isfile(p):
+        return p
+    # 默认：克隆环境（env/python.exe）；若存在标准 venv 布局（env/Scripts/python.exe）也兼容
+    for cand in (
+        os.path.join(QWEN_TTS_DIR, "env", "python.exe"),
+        os.path.join(QWEN_TTS_DIR, "env", "Scripts", "python.exe"),
+    ):
+        if os.path.isfile(cand):
+            return cand
+    return os.path.join(QWEN_TTS_DIR, "env", "python.exe")  # 不存在时返回默认路径，便于上层报错提示
+
+
+async def _qwen_tts_alive(timeout=2.0):
+    """探测 Qwen3-TTS 服务是否可用（无论谁启动的）。"""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.get(f"{QWEN_TTS_BASE}/health")
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+    return None
+
+
+@app.get("/api/tts/qwen/status")
+async def qwen_tts_status():
+    """Qwen3-TTS 服务状态。running 表示端口上确实有可用服务（不限于本后端拉起的）。"""
+    health = await _qwen_tts_alive()
+    runtime = _qwen_tts_runtime_path()
+    # 独立环境是否已就绪（env 存在 + qwen-tts 已安装）——放线程池避免阻塞事件循环
+    try:
+        import qwen_tts_installer as _qi
+        env_ready, model_ready = await asyncio.to_thread(
+            lambda: (_qi.is_installed(), _qi.is_model_ready()))
+    except Exception:
+        env_ready = os.path.isfile(runtime)
+        model_ready = False
+    return {
+        "ok": True,
+        "running": bool(health and health.get("ok")),
+        "ready": bool(health and health.get("ready")),
+        "loading": bool(health and health.get("loading")) if health else False,
+        "health": health,
+        "managed": bool(_qwen_tts_proc and _qwen_tts_proc.poll() is None),
+        "installed": os.path.isfile(os.path.join(QWEN_TTS_SERVER_DIR, "api.py")),
+        "env_ready": env_ready,
+        "model_ready": model_ready,
+        "runtime": runtime,
+        "runtime_ok": os.path.isfile(runtime),
+        "model": DEFAULT_QWEN_TTS_MODEL,
+        "port": QWEN_TTS_PORT,
+    }
+
+
+@app.post("/api/tts/qwen/start")
+async def qwen_tts_start():
+    global _qwen_tts_proc
+    if await _qwen_tts_alive():
+        return {"ok": True, "msg": "服务已在运行", "already": True}
+    if not os.path.isfile(os.path.join(QWEN_TTS_SERVER_DIR, "api.py")):
+        return {"ok": False, "msg": "未找到 Qwen3-TTS 服务文件 (tts-qwen3/server/api.py)"}
+    runtime = _qwen_tts_runtime_path()
+    if not os.path.isfile(runtime):
+        return {"ok": False, "msg": f"未找到 Python 运行时: {runtime}。Qwen3-TTS 需独立环境，"
+                                    f"请在设置页点「一键安装环境」（克隆自带 runtime，无需另装 Python），"
+                                    f"或设置环境变量 GWC_QWEN_TTS_RUNTIME 指向已装好 qwen-tts 的 python.exe。"}
+    # 环境就绪但模型缺失时，启动会卡在懒下载，这里提前拦截并引导先下载模型
+    try:
+        import qwen_tts_installer as _qi
+        env_ok, model_ok = await asyncio.to_thread(
+            lambda: (_qi.is_installed(), _qi.is_model_ready()))
+        if env_ok and not model_ok:
+            return {"ok": False, "need_model": True,
+                    "msg": "环境已就绪，但模型权重尚未下载。请先点「下载模型」（可选国内 hf 镜像）。"}
+    except Exception:
+        pass
+    # 优先用用户在「模型管理」里切换的模型（current_model.txt），其次环境变量，最后默认 1.7B
+    try:
+        import qwen_tts_installer as _qi2
+        model = os.environ.get("GWC_QWEN_TTS_MODEL") or _qi2.get_current_model()
+    except Exception:
+        model = os.environ.get("GWC_QWEN_TTS_MODEL") or DEFAULT_QWEN_TTS_MODEL
+    try:
+        creation = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        _qwen_tts_proc = subprocess.Popen(
+            [runtime, "api.py", "-a", "127.0.0.1", "-p", str(QWEN_TTS_PORT), "--model", model],
+            cwd=QWEN_TTS_SERVER_DIR,
+            stdout=_open_tts_log("qwen3"), stderr=subprocess.STDOUT,
+            creationflags=creation,
+        )
+    except Exception as e:
+        return {"ok": False, "msg": f"启动失败: {e}"}
+    # 首次加载/下载模型较慢，这里只确认进程存活，就绪状态由前端轮询 /api/tts/qwen/status
+    return {"ok": True, "msg": "正在启动，首次需下载/加载模型，可能需要较长时间…", "pid": _qwen_tts_proc.pid}
+
+
+@app.post("/api/tts/qwen/stop")
+async def qwen_tts_stop():
+    global _qwen_tts_proc
+    if _qwen_tts_proc and _qwen_tts_proc.poll() is None:
+        try:
+            _kill_proc_tree(_qwen_tts_proc)
+        except Exception as e:
+            return {"ok": False, "msg": f"停止失败: {e}"}
+        _qwen_tts_proc = None
+        return {"ok": True, "msg": "Qwen3-TTS 已停止"}
+    if await _qwen_tts_alive():
+        return {"ok": False, "msg": "该服务不是由本程序启动的，请在其原窗口中关闭"}
+    return {"ok": True, "msg": "服务本就未运行"}
+
+
+@app.get("/api/tts/qwen/voices")
+async def qwen_tts_voices():
+    """代理到 Qwen3-TTS 的音色列表。"""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{QWEN_TTS_BASE}/voices")
+            return r.json()
+    except Exception as e:
+        return {"ok": False, "msg": f"未能获取音色列表（服务未运行？）: {e}", "voices": []}
+
+
+@app.post("/api/tts/qwen/voice/save")
+async def qwen_tts_voice_save(req: Request):
+    """代理：保存 Qwen3-TTS 音色（透传 multipart/form-data 到 9881 /voice/save）。"""
+    try:
+        import httpx
+        body = await req.body()
+        content_type = req.headers.get("content-type", "")
+        async with httpx.AsyncClient(timeout=120) as c:
+            r = await c.post(f"{QWEN_TTS_BASE}/voice/save", content=body,
+                             headers={"Content-Type": content_type})
+            return r.json()
+    except Exception as e:
+        return {"ok": False, "message": f"保存音色失败（服务未运行？）: {e}"}
+
+
+@app.delete("/api/tts/qwen/voice/{voice_id}")
+async def qwen_tts_voice_delete(voice_id: str):
+    """代理：删除 Qwen3-TTS 音色。"""
+    try:
+        import httpx
+        from urllib.parse import quote
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.delete(f"{QWEN_TTS_BASE}/voice/{quote(voice_id)}")
+            return r.json()
+    except Exception as e:
+        return {"ok": False, "message": f"删除音色失败（服务未运行？）: {e}"}
+
+
+@app.get("/api/tts/qwen/emotions")
+async def qwen_tts_emotions():
+    """返回预置情绪模板列表。"""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{QWEN_TTS_BASE}/emotions")
+            return r.json()
+    except Exception as e:
+        return {"ok": False, "msg": f"未能获取情绪模板: {e}", "emotions": []}
+
+
+@app.post("/api/tts/qwen/set_voice")
+async def qwen_tts_set_voice(req: Request):
+    """预热并缓存指定角色的克隆 prompt。"""
+    data = await req.json()
+    vid = (data.get("voice_id") or "").strip()
+    if not vid:
+        return {"ok": False, "msg": "voice_id 不能为空"}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=300) as c:
+            r = await c.post(f"{QWEN_TTS_BASE}/set_voice", json={"voice_id": vid})
+            return r.json()
+    except Exception as e:
+        return {"ok": False, "msg": f"切换音色失败: {e}"}
+
+
+# ---- Qwen3-TTS 一键安装（独立环境 + 依赖，考虑网络问题）----
+# 注意：安装器 qwen_tts_installer.py 由下方端点按需 import 并缓存，
+# 修改安装器代码后需重启后端进程才会生效。
+
+@app.get("/api/tts/qwen/install/status")
+async def qwen_tts_install_status():
+    """安装进度 / 当前状态（前端轮询）。"""
+    import qwen_tts_installer as qi
+    snap = qi.PROGRESS.snapshot()
+    return {"ok": True, **snap}
+
+
+@app.post("/api/tts/qwen/install")
+async def qwen_tts_install(req: Request):
+    """一键安装：后台线程执行，前端轮询 /api/tts/qwen/install/status。
+
+    请求体：
+      - pip_index   : 自定义 pip 镜像源（默认清华，网络不佳可换阿里）
+      - hf_endpoint : 自定义 HF 端点（默认官方；大陆建议 https://hf-mirror.com）
+      - with_model  : 是否顺带预下载模型（默认 false，模型首启按需下载）
+      - model       : Base 模型 ID（默认 1.7B）
+    """
+    import qwen_tts_installer as qi
+    data = await req.json() if (await req.body()) else {}
+    if qi.PROGRESS.snapshot().get("running"):
+        return {"ok": False, "msg": "安装正在进行中"}
+    if qi.is_installed() and not data.get("with_model"):
+        return {"ok": False, "msg": "环境已安装。如需预下载模型，请勾选「预下载模型」后重试。"}
+
+    threading.Thread(
+        target=qi.install,
+        kwargs={
+            "pip_index": data.get("pip_index", ""),
+            "hf_endpoint": data.get("hf_endpoint", ""),
+            "with_model": bool(data.get("with_model", False)),
+            "model": data.get("model", ""),
+            "torch_variant": data.get("torch_variant", ""),
+        },
+        daemon=True,
+    ).start()
+    return {"ok": True, "msg": "已开始安装"}
+
+
+# ---- Qwen3-TTS 模型下载（独立于环境安装）----
+
+@app.get("/api/tts/qwen/model/status")
+async def qwen_tts_model_status():
+    """模型权重是否已就绪（用于区分「环境已装但模型缺失」状态）。"""
+    import qwen_tts_installer as qi
+    env_installed, model_ready = await asyncio.to_thread(
+        lambda: (qi.is_installed(), qi.is_model_ready()))
+    return {
+        "ok": True,
+        "env_installed": env_installed,
+        "model_ready": model_ready,
+        "models_dir": qi.MODELS_DIR,
+    }
+
+
+@app.post("/api/tts/qwen/download_model")
+async def qwen_tts_download_model(req: Request):
+    """单独下载模型权重（环境已就绪后调用）。请求体 { hf_endpoint, model, source }。
+
+    source: auto（默认，HF 失败回退 ModelScope）/ hf / modelscope
+    """
+    import qwen_tts_installer as qi
+    data = await req.json() if (await req.body()) else {}
+    if qi.MODEL_PROGRESS.snapshot().get("running"):
+        return {"ok": False, "msg": "模型下载正在进行中"}
+    if not qi.is_installed():
+        return {"ok": False, "msg": "Qwen3-TTS 环境尚未安装，请先点「一键安装环境」"}
+    if qi.is_model_ready():
+        return {"ok": True, "msg": "模型已就绪", "already": True}
+
+    threading.Thread(
+        target=qi.download_model,
+        kwargs={
+            "hf_endpoint": data.get("hf_endpoint", ""),
+            "model": data.get("model", ""),
+            "source": data.get("source", "auto"),
+        },
+        daemon=True,
+    ).start()
+    return {"ok": True, "msg": "已开始下载模型"}
+
+
+@app.get("/api/tts/qwen/download_model/status")
+async def qwen_tts_download_model_status():
+    """模型下载进度（前端轮询）。"""
+    import qwen_tts_installer as qi
+    return {"ok": True, **qi.MODEL_PROGRESS.snapshot()}
+
+
+# ---- TTS 日志查询（供全栈控制台 / 设置页展示）----
+
+@app.get("/api/tts/logs")
+async def tts_logs(engine: str = "sovits", tail: int = 200):
+    """读取内置配音日志（sovits / qwen3）。"""
+    if engine not in ("sovits", "qwen3"):
+        engine = "sovits"
+    return {"ok": True, "engine": engine, "lines": _read_tts_log(engine, tail)}
+
+
+@app.get("/api/tts/qwen/logs")
+async def qwen_tts_logs(tail: int = 200):
+    """读取 Qwen3-TTS 日志。"""
+    return {"ok": True, "engine": "qwen3", "lines": _read_tts_log("qwen3", tail)}
+
+
+# ============================================================
+# Qwen3-TTS torch 版本管理 + 环境检查更新
+# ============================================================
+
+@app.get("/api/tts/qwen/torch/info")
+async def qwen_torch_info():
+    """当前 torch 版本/后端 + 可选 torch 变体列表。"""
+    import qwen_tts_installer as qi
+    try:
+        # get_torch_info 内部 subprocess 探测 torch，可能较慢，放线程池避免阻塞事件循环
+        return {"ok": True, **await asyncio.to_thread(qi.torch_variants_with_info)}
+    except Exception as e:
+        # 即使探测失败也返回变体列表，避免前端列表空白
+        return {"ok": True, "torch_info": {"installed": False, "torch_version": None, "error": str(e)},
+                "variants": [{"id": v["id"], "label": v["label"], "desc": v["desc"]} for v in qi.TORCH_VARIANTS]}
+
+
+@app.get("/api/tts/qwen/torch/status")
+async def qwen_torch_status():
+    """torch 安装/卸载进度（前端轮询）。"""
+    import qwen_tts_installer as qi
+    return {"ok": True, **qi.TORCH_PROGRESS.snapshot()}
+
+
+@app.post("/api/tts/qwen/torch/install")
+async def qwen_torch_install(req: Request):
+    """切换/安装指定 torch 变体。请求体 { variant: "cu126"|"cu124"|"cu121"|"directml"|"cpu", mirror: "sjtug"|"official"|"aliyun" }。"""
+    import qwen_tts_installer as qi
+    data = await req.json() if (await req.body()) else {}
+    variant = (data.get("variant") or "").strip()
+    if not variant:
+        return {"ok": False, "msg": "variant 不能为空"}
+    if qi.TORCH_PROGRESS.snapshot().get("running"):
+        return {"ok": False, "msg": "torch 操作正在进行中"}
+
+    mirror = (data.get("mirror") or "").strip() or None
+    threading.Thread(target=qi.install_torch_variant, args=(variant,), kwargs={"mirror": mirror}, daemon=True).start()
+    return {"ok": True, "msg": "已开始切换 torch"}
+
+
+@app.get("/api/tts/qwen/torch/mirrors")
+async def qwen_torch_mirrors():
+    """torch CUDA 下载镜像列表。"""
+    import qwen_tts_installer as qi
+    return {"ok": True, "mirrors": qi.TORCH_MIRRORS, "default": "sjtug"}
+
+
+@app.get("/api/tts/qwen/hardware")
+async def qwen_hardware():
+    """本机硬件检测（GPU 型号/显存/厂商，含核显与多卡）。"""
+    import qwen_tts_installer as qi
+    return {"ok": True, **await asyncio.to_thread(qi.detect_hardware)}
+
+
+@app.get("/api/tts/qwen/models")
+async def qwen_models():
+    """Qwen3-TTS 可选模型型号列表（含下载/当前状态）。"""
+    import qwen_tts_installer as qi
+    return {"ok": True, **await asyncio.to_thread(qi.list_qwen3_models)}
+
+
+@app.post("/api/tts/qwen/model/switch")
+async def qwen_model_switch(req: Request):
+    """切换当前使用的 Base 模型。请求体 { model: "Qwen/Qwen3-TTS-12Hz-1.7B-Base" }。"""
+    import qwen_tts_installer as qi
+    data = await req.json() if (await req.body()) else {}
+    model = (data.get("model") or "").strip()
+    if not model:
+        return {"ok": False, "msg": "model 不能为空"}
+    try:
+        return {"ok": True, **qi.switch_model(model)}
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}
+
+
+@app.post("/api/tts/qwen/model/uninstall")
+async def qwen_model_uninstall(req: Request):
+    """卸载指定模型的本地缓存。请求体 { model }。"""
+    import qwen_tts_installer as qi
+    data = await req.json() if (await req.body()) else {}
+    model = (data.get("model") or "").strip()
+    if not model:
+        return {"ok": False, "msg": "model 不能为空"}
+    try:
+        return {"ok": True, **await asyncio.to_thread(qi.uninstall_model, model)}
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}
+
+
+@app.post("/api/tts/qwen/torch/uninstall")
+async def qwen_torch_uninstall():
+    """卸载 torch/torchaudio（供用户清理不需要的版本）。"""
+    import qwen_tts_installer as qi
+    if qi.TORCH_PROGRESS.snapshot().get("running"):
+        return {"ok": False, "msg": "torch 操作正在进行中"}
+    threading.Thread(target=qi.uninstall_torch, daemon=True).start()
+    return {"ok": True, "msg": "已开始卸载 torch"}
+
+
+@app.post("/api/tts/qwen/check_updates")
+async def qwen_check_updates():
+    """检查核心依赖是否有更新（qwen-tts / torch / transformers / torchaudio）。"""
+    import qwen_tts_installer as qi
+    try:
+        return await asyncio.to_thread(qi.check_updates)
+    except Exception as e:
+        return {"ok": False, "msg": f"检查更新失败: {e}", "items": []}
+
+
+@app.post("/api/tts/qwen/update_package")
+async def qwen_update_package(req: Request):
+    """升级指定包到最新版（供「更新」按钮调用）。请求体 { package }。"""
+    import qwen_tts_installer as qi
+    data = await req.json() if (await req.body()) else {}
+    pkg = (data.get("package") or "").strip()
+    if not pkg:
+        return {"ok": False, "msg": "package 不能为空"}
+    # 安全白名单，防止任意包名注入
+    if pkg not in ("qwen-tts", "torch", "torchaudio"):
+        return {"ok": False, "msg": f"不允许更新该包: {pkg}（transformers 被 qwen-tts 锁定）"}
+    if qi.UPDATE_PROGRESS.snapshot().get("running"):
+        return {"ok": False, "msg": "已有更新操作进行中"}
+    threading.Thread(target=qi.update_package, args=(pkg,), daemon=True).start()
+    return {"ok": True, "msg": f"已开始升级 {pkg}"}
+
+
+@app.get("/api/tts/qwen/update/status")
+async def qwen_update_status():
+    """更新操作进度查询。"""
+    import qwen_tts_installer as qi
+    return {"ok": True, **qi.UPDATE_PROGRESS.snapshot()}
+
+
+@app.post("/api/tts/qwen/cancel")
+async def qwen_cancel_active():
+    """强制终止当前正在运行的下载/安装/加载子进程（供「停止」按钮调用）。"""
+    import qwen_tts_installer as qi
+    try:
+        await asyncio.to_thread(qi.cancel_active_task)
+    except Exception as e:
+        return {"ok": False, "msg": f"取消失败: {e}"}
+    return {"ok": True, "msg": "已发送停止指令，正在强制终止…"}
 
 
 # --- 核心 JSON 数据 API ---

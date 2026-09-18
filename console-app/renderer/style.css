@@ -112,6 +112,34 @@ html, body {
   box-shadow: 0 0 6px var(--accent, #4ade80);
 }
 
+.collapse-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 11px;
+  width: 16px;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.collapse-btn:hover {
+  color: #e2e8f0;
+}
+
+/* 折叠状态：隐藏日志正文，仅保留头部 */
+.pane.collapsed {
+  flex: 0 0 auto;
+}
+
+.pane.collapsed .pane-body {
+  display: none;
+}
+
+.pane.collapsed .pane-header {
+  border-bottom: none;
+}
+
 .pane-title {
   font-weight: 600;
   color: var(--accent, #e2e8f0);

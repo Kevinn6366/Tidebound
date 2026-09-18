@@ -14,9 +14,11 @@ const { spawn, exec } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
+const http = require('http')
 
 const ROOT = path.join(__dirname, '..')
 const BACKEND_PORT = 5201
+const BACKEND_BASE = `http://127.0.0.1:${BACKEND_PORT}`
 
 let mainWindow = null
 const children = new Map() // id -> ChildProcess
@@ -61,6 +63,29 @@ const SERVICES = [
     shell: true,
     tui: true, // 交互式 TUI，无法通过管道显示，需在独立终端运行
   },
+  {
+    id: 'tts_sovits',
+    name: 'TTS (GPT-SoVITS)',
+    color: '#f59e0b',
+    remote: {
+      status: '/api/tts/status',
+      log: '/api/tts/logs?engine=sovits',
+      start: '/api/tts/start',
+      stop: '/api/tts/stop',
+    },
+  },
+  {
+    id: 'tts_qwen',
+    name: 'TTS (Qwen3)',
+    color: '#a78bfa',
+    remote: {
+      status: '/api/tts/qwen/status',
+      log: '/api/tts/qwen/logs',
+      start: '/api/tts/qwen/start',
+      stop: '/api/tts/qwen/stop',
+      install: '/api/tts/qwen/install',
+    },
+  },
 ]
 
 // ============================================================
@@ -103,6 +128,52 @@ function waitForPort(port, timeoutMs = 90000) {
     }
     attempt()
   })
+}
+
+// ============================================================
+// 远程服务（TTS 由 backend 管理，控制台通过 HTTP 远程控制 + 拉日志）
+// ============================================================
+function httpJson(method, apiPath, body) {
+  return new Promise((resolve) => {
+    const data = body ? JSON.stringify(body) : null
+    const req = http.request(BACKEND_BASE + apiPath, {
+      method,
+      headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
+    }, (res) => {
+      let buf = ''
+      res.setEncoding('utf8')
+      res.on('data', (c) => { buf += c })
+      res.on('end', () => {
+        try { resolve(JSON.parse(buf)) } catch (e) { resolve({ ok: false, msg: buf.slice(0, 200) }) }
+      })
+    })
+    req.on('error', (e) => resolve({ ok: false, msg: '后端不可达: ' + e.message }))
+    if (data) req.write(data)
+    req.end()
+  })
+}
+
+async function pollRemote(svc) {
+  // 状态
+  try {
+    const st = await httpJson('GET', svc.remote.status)
+    const running = !!(st && st.running)
+    send(svc.id, { type: 'status', running })
+    if (!running && st && st.msg && st.msg.includes('need_model')) {
+      send(svc.id, { type: 'log', line: `⚠ ${st.msg}`, err: true })
+    }
+  } catch (e) {}
+  // 日志（附加式拉取）
+  try {
+    const lg = await httpJson('GET', svc.remote.log)
+    if (lg && Array.isArray(lg.lines)) {
+      send(svc.id, { type: 'logBatch', lines: lg.lines })
+    }
+  } catch (e) {}
+}
+
+function startRemotePolling(svc) {
+  setInterval(() => pollRemote(svc), 2000)
 }
 
 function killTree(pid) {
@@ -178,8 +249,30 @@ function spawnService(svc) {
 }
 
 function stopService(id) {
+  const svc = SERVICES.find((s) => s.id === id)
+  if (svc && svc.remote) {
+    httpJson('POST', svc.remote.stop).then((r) => {
+      send(id, { type: 'log', line: r && r.ok ? `> 已发送停止指令` : `> ${(r && r.msg) || '停止失败'}`, err: !(r && r.ok) })
+    })
+    return
+  }
   const child = children.get(id)
   if (child) killTree(child.pid)
+}
+
+function restartService(id) {
+  const svc = SERVICES.find((s) => s.id === id)
+  if (svc && svc.remote) {
+    stopService(id)
+    setTimeout(() => {
+      httpJson('POST', svc.remote.start).then((r) => {
+        send(id, { type: 'log', line: r && r.ok ? `> 已发送启动指令` : `> ${(r && r.msg) || '启动失败'}`, err: !(r && r.ok) })
+      })
+    }, 800)
+    return
+  }
+  stopService(id)
+  setTimeout(() => spawnService(svc), 1200)
 }
 
 function openTerminalFor(svc) {
@@ -194,6 +287,13 @@ function openTerminalFor(svc) {
 async function startAll() {
   for (const svc of SERVICES) {
     if (children.has(svc.id)) continue // 已运行
+    if (svc.remote) {
+      // 远程服务（TTS 由 backend 管理）：只启动轮询，不手动拉起
+      send(svc.id, { type: 'log', line: '> TTS 由后端管理，此处仅显示状态与日志（可在下方用按钮启停）', err: false })
+      startRemotePolling(svc)
+      pollRemote(svc)
+      continue
+    }
     if (svc.id === 'opencode' && shouldSkipOpencode()) {
       send(svc.id, { type: 'log', line: '> 已在设置中禁用 OpenCode 自动启动，跳过', err: false })
       continue
@@ -218,15 +318,30 @@ async function startAll() {
 // ============================================================
 // IPC
 // ============================================================
-ipcMain.handle('get-services', () => SERVICES.map((s) => ({ id: s.id, name: s.name, color: s.color })))
+ipcMain.handle('get-services', () => SERVICES.map((s) => ({ id: s.id, name: s.name, color: s.color, remote: !!s.remote })))
 ipcMain.on('start-all', () => { startAll() })
 ipcMain.on('stop-all', () => { killAll() })
 ipcMain.on('stop-service', (e, id) => { stopService(id) })
-ipcMain.on('restart-service', async (e, id) => { stopService(id); setTimeout(() => spawnService(SERVICES.find((s) => s.id === id)), 1200) })
+ipcMain.on('restart-service', (e, id) => { restartService(id) })
+ipcMain.on('start-service', (e, id) => {
+  const svc = SERVICES.find((s) => s.id === id)
+  if (!svc) return
+  if (svc.remote) {
+    httpJson('POST', svc.remote.start).then((r) => {
+      send(id, { type: 'log', line: r && r.ok ? `> 已发送启动指令` : `> ${(r && r.msg) || '启动失败'}`, err: !(r && r.ok) })
+    })
+  } else if (!children.has(id)) {
+    spawnService(svc)
+  }
+})
 ipcMain.on('open-terminal', (e, id) => {
   const svc = SERVICES.find((s) => s.id === id)
   if (!svc) return
   openTerminalFor(svc)
+})
+ipcMain.on('remote-poll', (e, id) => {
+  const svc = SERVICES.find((s) => s.id === id)
+  if (svc && svc.remote) pollRemote(svc)
 })
 
 // ============================================================

@@ -208,7 +208,7 @@ const DEFAULT_SETTINGS = {
   ttsUrlTemplate: 'http://127.0.0.1:9880/tts?text={text}&text_lang={lang}&ref_audio_path={ref_audio}&prompt_text={ref_text}&prompt_lang={ref_lang}',
   ttsLanguage: 'zh', ttsVolume: 1.0, bgmVolume: 0.3, bgmMode: 'sequential', enableBgmToast: false,
   // ✨ 新增手机端模式开关状态与缩放比例
-  ttsBuiltIn: false, ttsVoiceId: '', enableMobileUI: false, mobileUIScale: 1.0,
+  ttsBuiltIn: false, ttsVoiceId: '', ttsEngine: 'sovits', ttsQwenVoiceId: '', ttsQwenEmotion: 'calm', enableMobileUI: false, mobileUIScale: 1.0,
   storySpriteScale: 1.0, storySpriteX: 0, storySpriteY: 0,
   live2dScale: 0.2, live2dX: 0, live2dY: 0, titleLive2dScale: 0.2, titleLive2dX: 0, titleLive2dY: 0,
   live2dResolution: window.devicePixelRatio || 1, // ✨ 新增：模型渲染分辨率精度
@@ -2706,20 +2706,25 @@ export default function AppCore({ router }) {
 
   const processAudioQueue = useCallback(() => {
     if (isPlayingTTSRef.current || ttsTaskQueueRef.current.length === 0) return;
-    
+
+    // 关键：队首音频若还没加载完成（ready=false），先不播放，等 canplaythrough 回调再来。
+    // 否则 play() 会在音频未就绪时失败，被 catch 跳过 → 丢失该句（新老方案都会丢句的根因）。
+    const head = ttsTaskQueueRef.current[0];
+    if (!head || !head.ready) return;
+
     isPlayingTTSRef.current = true;
     const currentTask = ttsTaskQueueRef.current.shift();
-    
+
     activeAudioRef.current = currentTask.audioObj;
     activeAudioRef.current.volume = ttsVolRef.current;
-    activeAudioRef.current.playbackRate = ttsRateRef.current || 1.0; 
-    
-    activeAudioRef.current.onended = () => { 
-      if (ttsPauseRef.current > 0) { 
-        ttsTimeoutRef.current = setTimeout(() => { isPlayingTTSRef.current = false; processAudioQueue(); }, ttsPauseRef.current); 
-      } else { 
-        isPlayingTTSRef.current = false; processAudioQueue(); 
-      } 
+    activeAudioRef.current.playbackRate = ttsRateRef.current || 1.0;
+
+    activeAudioRef.current.onended = () => {
+      if (ttsPauseRef.current > 0) {
+        ttsTimeoutRef.current = setTimeout(() => { isPlayingTTSRef.current = false; processAudioQueue(); }, ttsPauseRef.current);
+      } else {
+        isPlayingTTSRef.current = false; processAudioQueue();
+      }
     };
 
     activeAudioRef.current.onerror = (e) => {
@@ -2729,42 +2734,82 @@ export default function AppCore({ router }) {
 
     const playPromise = activeAudioRef.current.play();
     if (playPromise !== undefined) {
-        playPromise.catch(e => { 
-          console.warn("TTS 播放被浏览器拦截或失败:", e); 
-          isPlayingTTSRef.current = false; processAudioQueue(); 
+        playPromise.catch(e => {
+          console.warn("TTS 播放被浏览器拦截或失败:", e);
+          isPlayingTTSRef.current = false; processAudioQueue();
         });
     }
   }, []);
 
   const enqueueTTS = useCallback((text) => {
-    if (!settings.ttsEnabled || !settings.ttsUrlTemplate || !text.trim()) return;
+    if (!settings.ttsEnabled || !text.trim()) return;
+
+    // 解析情绪标签 <emotion>标签</emotion>（由回复模型自动输出）
+    let cleanText = text, useEmotion = null;
     try {
-      let url = settings.ttsUrlTemplate
-          .replace('{text}', encodeURIComponent(text.trim()))
-          .replace('{lang}', settings.ttsLanguage);
-
-      if (!settings.ttsRefAudio) {
-          // 未填参考音频：剥离相关参数，让服务端使用自身配置的默认音色
-          // （内置配音由 tts_infer.yaml 指定；外部服务由其自身配置决定）
-          url = url.replace(/([&?])ref_audio_path=\{ref_audio\}/g, '')
-                   .replace(/([&?])prompt_text=\{ref_text\}/g, '')
-                   .replace(/([&?])prompt_lang=\{ref_lang\}/g, '')
-                   .replace(/\?&/, '?').replace(/&$/, '');
+      const em = text.match(/<emotion>\s*([^<]+?)\s*<\/emotion>/i);
+      if (em) {
+        const emotion = em[1].trim();
+        cleanText = text.replace(/<emotion>\s*[^<]+?\s*<\/emotion>/gi, '').trim();
+        useEmotion = emotion || (settings.ttsQwenEmotion && settings.ttsQwenEmotion !== 'calm' ? settings.ttsQwenEmotion : null);
       } else {
-          // 已填参考音频：按原样带入，用于指定音色/克隆
-          url = url.replace('{ref_audio}', encodeURIComponent(settings.ttsRefAudio || ''))
-                   .replace('{ref_text}', encodeURIComponent(settings.ttsRefText || ''))
-                   .replace('{ref_lang}', settings.ttsRefLang || 'zh');
+        useEmotion = (settings.ttsQwenEmotion && settings.ttsQwenEmotion !== 'calm' ? settings.ttsQwenEmotion : null);
       }
-      
-      const preloader = new window.Audio();
-      preloader.preload = 'auto';
-      preloader.src = url;
-      preloader.load(); 
+    } catch (e) {}
+    if (!cleanText) return;
 
-      ttsTaskQueueRef.current.push({ text, url, audioObj: preloader });
-      processAudioQueue();
-    } catch (error) {}
+    // 单一文本合成并入队（返回是否成功入队）
+    const enqueueSingle = (seg) => {
+      if (!seg) return;
+      try {
+        let url;
+        if (settings.ttsEngine === 'qwen') {
+          const voiceId = settings.ttsQwenVoiceId || settings.ttsVoiceId || '';
+          const params = new URLSearchParams({ text: seg, voice_id: voiceId, ...(useEmotion ? { emotion: useEmotion } : {}) });
+          url = `http://127.0.0.1:9881/tts?${params.toString()}`;
+        } else {
+          if (!settings.ttsUrlTemplate) return;
+          url = settings.ttsUrlTemplate.replace('{text}', encodeURIComponent(seg)).replace('{lang}', settings.ttsLanguage);
+          if (!settings.ttsRefAudio) {
+            url = url.replace(/([&?])ref_audio_path=\{ref_audio\}/g, '').replace(/([&?])prompt_text=\{ref_text\}/g, '')
+                     .replace(/([&?])prompt_lang=\{ref_lang\}/g, '').replace(/\?&/, '?').replace(/&$/, '');
+          } else {
+            url = url.replace('{ref_audio}', encodeURIComponent(settings.ttsRefAudio || ''))
+                     .replace('{ref_text}', encodeURIComponent(settings.ttsRefText || ''))
+                     .replace('{ref_lang}', settings.ttsRefLang || 'zh');
+          }
+        }
+        const preloader = new window.Audio();
+        preloader.preload = 'auto';
+        const task = { text: seg, url, audioObj: preloader, ready: false };
+        // 音频就绪（可播放）后再让它进队播放；加载失败也标记 ready 跳过，避免卡死
+        preloader.addEventListener('canplaythrough', () => { if (!task.ready) { task.ready = true; processAudioQueue(); } });
+        preloader.addEventListener('error', () => { if (!task.ready) { task.ready = true; processAudioQueue(); } });
+        preloader.src = url;
+        preloader.load();
+        ttsTaskQueueRef.current.push(task);
+        processAudioQueue();
+      } catch (e) {}
+    };
+
+    // 长文本分句（适度切分：切太细会触发很多次独立推理，GPU 单 worker 串行导致间隔长。
+    // 用较大粒度合句，减少推理次数，同时仍能逐段播放降低首包感知等待）
+    const MIN_SPLIT = 90;   // 低于此长度不切（整段一次推理）
+    if (cleanText.length > MIN_SPLIT) {
+      const parts = cleanText.replace(/\s+/g, ' ').match(/[^。！？!?\n]+[。！？!?\n]?/g) || [cleanText];
+      let chunk = '';
+      const flush = () => { if (chunk.trim()) enqueueSingle(chunk.trim()); chunk = ''; };
+      for (const part of parts) {
+        if (!part.trim()) continue;
+        // 合并短句，尽量凑到 120 字左右再入队，减少推理次数
+        if ((chunk + part).length > 120) { flush(); }
+        chunk += part;
+      }
+      flush();
+      return;
+    }
+
+    enqueueSingle(cleanText);
   }, [settings, processAudioQueue]);
   useEffect(() => { enqueueTTSRef.current = enqueueTTS; }, [enqueueTTS]);
 
@@ -2881,6 +2926,8 @@ export default function AppCore({ router }) {
                         const latestMsgs = activeSession?.messages || [];
                         let displayContent = reply; let voiceContent = reply;
                         if (settings.enableTranslation) { displayContent = (reply.match(/<TEXT>([\s\S]*?)(?:<\/TEXT>|$)/i)?.[1] || reply).trim(); voiceContent = (reply.match(/<VOICE>([\s\S]*?)(?:<\/VOICE>|$)/i)?.[1] || reply).trim(); }
+                        // 剥离情绪标签，避免显示在气泡里
+                        displayContent = displayContent.replace(/<emotion>\s*[^<]+?\s*<\/emotion>/gi, '').trim();
                         updateSessionMessages(activeSessionId, [...latestMsgs, { role: 'assistant', content: displayContent }]);
                         if (settings.ttsEnabled) { enqueueTTS(voiceContent); }
                       }}
@@ -2909,6 +2956,10 @@ export default function AppCore({ router }) {
       const langMap = { 'zh': '中文', 'ja': '日文', 'en': '英文', 'ko': '韩文' }; const dispLangStr = langMap[settings.displayLanguage] || settings.displayLanguage; const voiceLangStr = langMap[settings.ttsLanguage] || settings.ttsLanguage;
 
       let finalSystemPrompt = settings.customSystemPrompt;
+      // 情绪控制：让回复模型自动根据内容选择情绪，输出 <emotion>标签</emotion>（供 TTS 使用）
+      if (settings.ttsEnabled) {
+        finalSystemPrompt = (finalSystemPrompt || '') + '\n\n【情绪标注】请根据你的回复内容，在回复末尾用 <emotion>标签</emotion> 标注本条回复的情绪，标签从以下选一个：平静、开心、悲伤、生气、害羞。示例：<emotion>开心</emotion>（仅标注，不要在正文里解释情绪）。';
+      }
       // RAG 技能检索注入
       try {
         if (settings.enableSkills === false) {
@@ -2986,7 +3037,17 @@ export default function AppCore({ router }) {
         fetchBody = { model: settings.aiModel, messages: apiMessages, stream: settings.enableStreaming, temperature: settings.aiTemperature || 0.7 };
       }
 
-      const response = await fetch(fetchUrl, { method: 'POST', headers: fetchHeaders, body: JSON.stringify(fetchBody) });
+      // 503/429（服务暂时过载/限流）是暂时性错误，自动重试最多 2 次，缓解「Service temporarily overloaded」
+      let response = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        response = await fetch(fetchUrl, { method: 'POST', headers: fetchHeaders, body: JSON.stringify(fetchBody) });
+        if (response.ok) break;
+        if ((response.status === 503 || response.status === 429) && attempt < 2) {
+          await new Promise(res => setTimeout(res, 1200 * (attempt + 1)));
+          continue;
+        }
+        break;
+      }
       if (!response.ok) {
         let msg = `HTTP ${response.status}`;
         try { const ed = await response.json(); msg = ed?.error?.message || ed?.msg || msg; } catch {}
@@ -3138,6 +3199,7 @@ export default function AppCore({ router }) {
 
         let displayContent = assistantContent; let voiceContent = assistantContent;
         if (settings.enableTranslation) { displayContent = (assistantContent.match(/<TEXT>([\s\S]*?)(?:<\/TEXT>|$)/i)?.[1] || assistantContent).trim(); voiceContent = (assistantContent.match(/<VOICE>([\s\S]*?)(?:<\/VOICE>|$)/i)?.[1] || assistantContent).trim(); }
+        displayContent = displayContent.replace(/<emotion>\s*[^<]+?\s*<\/emotion>/gi, '').trim();
         const finalMessages = [...uiMessages, { role: 'assistant', content: displayContent }]; updateSessionMessages(activeSessionId, finalMessages); enqueueTTS(voiceContent);
         // 推送 AI 回复文本到桌宠聊天框
         fetch('/api/pet_chat/message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_msg: userMessage.content?.substring(0, 200) || '', ai_msg: displayContent }) }).catch(() => {});

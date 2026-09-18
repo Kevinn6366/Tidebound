@@ -1,0 +1,20 @@
+# Qwen3-TTS 服务依赖（仅供参考）
+
+实际安装由「一键安装器」（backend/qwen_tts_installer.py）完成：它克隆项目自带
+backend/runtime 作为独立环境，再 pip 安装以下依赖，**无需用户手动执行本文件**，
+也不需要用户另外安装 Python（自带 runtime 内置 python.exe + pip）。
+
+核心依赖（由 `qwen-tts` 自动带入 torch / torchaudio / transformers / librosa 等）：
+
+```bash
+pip install qwen-tts fastapi uvicorn soundfile numpy
+```
+
+网络不畅时可加国内镜像源：
+
+```bash
+pip install qwen-tts fastapi uvicorn soundfile numpy -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+> 模型权重按需下载（首次启动），大陆网络建议设 HF_ENDPOINT=https://hf-mirror.com。
+> 详见 https://github.com/QwenLM/Qwen3-TTS

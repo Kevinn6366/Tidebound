@@ -25,6 +25,13 @@ tts/*
 !tts/copy_tts.py
 !tts/README.md
 
+# 内置配音 (Qwen3-TTS)：模型按需下载，独立 Python 环境体积巨大，均不入库。
+# 保留服务代码、启动脚本与说明；voices 参考音频由用户自备（仅保留说明）。
+tts-qwen3/models/
+tts-qwen3/env/
+tts-qwen3/voices/*
+!tts-qwen3/voices/README.md
+
 # === 官网介绍页（仅根目录的 index.html；frontend/index.html 为 Vite 入口需保留） ===
 /index.html
 
