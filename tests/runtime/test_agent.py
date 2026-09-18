@@ -319,3 +319,77 @@ def test_context_reset_stops_old_run_and_survives_restart(tmp_path: Path) -> Non
         assert len(session_view(restarted, owner).messages) == 2
 
     asyncio.run(scenario())
+
+
+def test_worldview_run_snapshot_and_budget(tmp_path: Path) -> None:
+    """验证世界观覆盖工具前后、下轮重载、欢迎入口及预算拒绝。
+
+    Args:
+        tmp_path: 隔离的提示词和运行记录目录。
+    """
+    import shutil
+
+    from src.tidebound.config import ROOT
+    from tests.runtime.test_meet import MeetModel
+
+    root = tmp_path / "prompts"
+    shutil.copytree(ROOT / "prompts", root)
+    world = root / "master/world.worldview/world.worldview-zh.md"
+    world.write_text("WORLD_FIRST", encoding="utf-8")
+
+    async def scenario() -> None:
+        """使用受控模型验证实际执行入口，不访问供应商。"""
+        systems: list[str] = []
+
+        class UpdatingModel(ScriptedModel):
+            async def complete(self, system: str, messages: list[Message],
+                               tools: list[dict[str, object]]) -> ModelReply:
+                """记录 system 并模拟 Run 中途修改世界观。
+
+                Args:
+                    system: 当前请求的系统正文。
+                    messages: 当前请求消息链。
+                    tools: 可用工具声明。
+
+                Returns:
+                    预设工具调用或最终回复。
+                """
+                systems.append(system)
+                world.write_text("WORLD_NEXT", encoding="utf-8")
+                return await super().complete(system, messages, tools)
+
+        model = UpdatingModel([tool_reply(), final_reply()])
+        settings = AgentSettings(base_url="http://fixture", model="test", data_dir=tmp_path / "data",
+                                 prompts_dir=root, context_limit=32768)
+        service = ChatSession(settings, model)
+        owner = uuid4().hex
+        run = service.start(owner, str(uuid4()), "几点了")
+        await service.active[owner].task
+        assert run.status == "completed"
+        assert len(systems) == 2
+        assert all(system.count("WORLD_FIRST") == 1 and "WORLD_NEXT" not in system for system in systems)
+        assert all("WORLD_FIRST" not in message.content for message in run.messages)
+        service.start(owner, str(uuid4()), "你好")
+        await service.active[owner].task
+        assert systems[-1].count("WORLD_NEXT") == 1 and "WORLD_FIRST" not in systems[-1]
+        await service.close()
+
+        meet_model = MeetModel()
+        service = ChatSession(settings, meet_model)
+        other = uuid4().hex
+        run = service.prepare_meet(other)
+        await service.active[other].task
+        assert run is not None and run.status == "completed"
+        assert meet_model.inputs[0][0].count("WORLD_NEXT") == 1
+        await service.close()
+
+        world.write_text("世界观" * 20000, encoding="utf-8")
+        blocked = ScriptedModel([final_reply()])
+        service = ChatSession(settings, blocked)
+        run = service.start(owner, str(uuid4()), "超限")
+        await service.active[owner].task
+        assert run.error_code == "context_budget_exceeded"
+        assert not blocked.inputs
+        await service.close()
+
+    asyncio.run(scenario())

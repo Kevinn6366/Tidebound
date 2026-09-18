@@ -28,7 +28,7 @@ class AgentSettings(BaseModel):
     data_dir: Path = ROOT / "data" / "agent"
     max_model_calls: int = Field(default=4, ge=1, le=20)
     max_output_tokens: int = Field(default=2048, ge=1)
-    context_limit: int = Field(default=16384, ge=2048)
+    context_limit: int = Field(default=32768, ge=2048)
     timeout_seconds: float = Field(default=120, gt=0, le=600)
 
     @classmethod

@@ -28,7 +28,7 @@ from src.tidebound.workflows.compaction.types import CompactionInput
 
 
 def make_settings(root: Path) -> AgentSettings:
-    """创建简短角色与真实压缩提示词组成的隔离测试配置。
+    """创建简短角色、世界观与真实压缩提示词组成的隔离测试配置。
 
     Args:
         root: 测试运行数据根目录。
@@ -40,6 +40,7 @@ def make_settings(root: Path) -> AgentSettings:
     shutil.copytree(ROOT / "prompts" / "master", prompts / "master")
     shutil.copyfile(ROOT / "prompts" / "master.yaml", prompts / "master.yaml")
     (prompts / "master/chat.character/chat.character-zh.md").write_text("ROLE_SENTINEL", encoding="utf-8")
+    (prompts / "master/world.worldview/world.worldview-zh.md").write_text("WORLD_SENTINEL", encoding="utf-8")
     return AgentSettings(base_url="http://fixture", model="fixture", data_dir=root / "data",
                          prompts_dir=prompts, context_limit=16384, max_output_tokens=1024)
 

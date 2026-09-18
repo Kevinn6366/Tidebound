@@ -16,6 +16,7 @@
 | 工具声明 `tools` | 名称、功能描述、参数 schema，由注册表生成 | 已实现，与正文注入分别传递 |
 | 工具结果 | 本次执行得到的事实，通过 `role=tool` 回填 | 已实现，不作为系统指令加载 |
 | 历史、摘要和记忆 | 当前用户与有效时间线的事实材料 | 已实现完整历史和滚动上下文摘要；独立长期记忆仍待设计 |
+| `world.worldview` | 常驻世界观背景，已填写亚托莉世界观 | 已实现，Run 开始时加载，缺失按空白处理 |
 | 场景与其他动态注入 | 独立用途的背景或当轮材料 | 尚未实现，具体协议由对应专项规格确定 |
 
 工具提示词不能授予权限。可用能力以服务端注册表为准，执行仍需检查名称、参数和停止状态。工具结果、用户输入和外部文本不能被当作可信提示词文件加载。
@@ -32,6 +33,8 @@ prompts/
     │   └── chat.character-zh.md
     ├── chat.safety/
     │   └── chat.safety-zh.md
+    ├── world.worldview/
+    │   └── world.worldview-zh.md
     └── tools.injection/
         └── tools.injection.timetools.md
 ```
@@ -115,3 +118,13 @@ manifest 校验覆盖 purpose 范围、语言、变体和名称唯一性；正�
 ## 2026-09-17 欢迎工作流注入
 
 `chat.meet` 注册于同一 master.yaml，正文位于 `master/chat.meet/chat.meet-zh.md`。欢迎工作流必须同时加载 `chat.character` 和 `chat.safety`，再注入 `chat.meet`；所有材料均参与预算。动态见面事件只作为此次请求资料，欢迎最终正文作为 assistant 消息立即提交，临时规则不沿用到普通对话。详见 [登录问候与对话时间](welcome-meet.md)。
+
+## 2026-09-18 世界观初始注入
+
+`world.worldview` 注册在 `master.yaml`，引用 `master/world.worldview/world.worldview-zh.md`，正文已根据官方网站、原始对话及用户确认填写为亚托莉世界观；来源与取舍见 [资料核对记录](../architecture/discussions/2026-09-18-atri-worldview-sources.md)。普通聊天与登录问候在 Run 开始时通过 `load_chat_system()` 按角色、安全约定、世界观的顺序组装 system；世界观在该 Run 内固定，每次模型请求均携带，下一 Run 重新加载。不写入消息历史，不在工具调用后重复追加。
+
+世界观 purpose 未注册、引用文件不存在、正文为空或只有版本注释时，按空白处理，不增加占位文案或分隔符。该例外仅适用于 `world.worldview`；角色、安全及其他必需包继续严格校验。世界观非法 manifest、越界路径、动态模板及其他读取错误仍明确失败，不当作空白忽略。
+
+世界观随完整初始 system 进入聊天、欢迎、压缩规划及空闲预算计量；实际摘要模型不接收世界观正文。超限沿用现有预算失败流程，不在检查后追加或静默删除世界观。未来多场景选择、切换及动态激活仍未实现，本次只开放固定世界观 bundle。
+
+填写世界观后，服务端默认上下文预算调整为 32,768，与 `.env.example` 一致，容纳完整常驻提示词及输出预留；显式环境配置及账号预算覆盖仍按原规则生效。当前计量仍为保守 UTF-8 字节估算，不是供应商精确 token 计数。
