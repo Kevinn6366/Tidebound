@@ -67,6 +67,9 @@ class RunView(BaseModel):
     tools: list[ToolResultView] = Field(default_factory=list)
     context_usage: ContextUsage | None = None
     preview: str = ""
+    first_reaction: str = ""
+    reaction_display_started_at: str | None = None
+    preview_stage: Literal["reaction", "answer"] = "answer"
     user_content: str = ""
     reply: str | None = None
     error_code: str | None = None
@@ -105,6 +108,8 @@ def run_view(record: RunRecord) -> RunView:
         不含系统提示词、模型配置或凭据的执行视图。
     """
     reply = record.messages[-1].content if record.status == "completed" else None
+    if reply and record.first_reaction and reply.startswith(record.first_reaction + "\n\n"):
+        reply = reply[len(record.first_reaction) + 2:]
     tool_views: list[ToolResultView] = []
     pending: dict[str, ToolResultView] = {}
     for message in record.messages:
@@ -120,6 +125,8 @@ def run_view(record: RunRecord) -> RunView:
                    completed_at=record.completed_at, display_started_at=record.display_started_at,
                    display_revision=record.display_revision,
                    display_pending=record.track_display_time and record.display_started_at is None, status=record.status, phase=record.phase, reply=reply, tools=tool_views,
+                   first_reaction=record.first_reaction if record.status in ("running", "completed") else "",
+                   reaction_display_started_at=record.reaction_display_started_at, preview_stage=record.preview_stage,
                    context_usage=record.context_usage, preview=record.preview if record.status == "running" else "", user_content=record.user_content,
                    error_code=record.error_code, error=record.error)
 
@@ -175,8 +182,11 @@ def session_view(service: ChatSession, owner: str) -> SessionView:
             if record.kind == "chat":
                 messages.append(DisplayMessage(id=f"{record.run_id}:user", role="user", content=record.user_content,
                     created_at=record.created_at))
-            final = record.messages[-1]
-            messages.append(DisplayMessage(id=f"{record.run_id}:assistant", role="assistant", content=final.content,
+            if record.first_reaction:
+                messages.append(DisplayMessage(id=f"{record.run_id}:reaction", role="assistant", content=record.first_reaction,
+                    kind=record.kind, created_at=record.reaction_display_started_at or record.completed_at,
+                    time_estimated=record.reaction_display_started_at is None))
+            messages.append(DisplayMessage(id=f"{record.run_id}:assistant", role="assistant", content=view.reply or "",
                 kind=record.kind,
                 created_at=record.display_started_at if record.track_display_time else record.completed_at or record.created_at,
                 display_revision=record.display_revision,

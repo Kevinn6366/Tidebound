@@ -64,6 +64,13 @@ prompts:
           name: companion.rules-zh
           segments:
             - content: "@master/companion.rules/companion.rules-zh.md"
+  tools.websearch.reaction:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.reaction-zh
+          segments:
+            - content: "@master/tools.websearch/reaction.md"
   tools.websearch.context:
     - language: zh
       variants:

@@ -1,4 +1,4 @@
-"""对话语境 → 获取搜索资料 → 阅读印象，主模型只接收整理结果。"""
+"""第一反应流 → 对话语境 → 获取搜索资料 → 阅读印象 → 主回复流。"""
 import asyncio
 from collections.abc import Awaitable, Callable
 from importlib import import_module
@@ -6,8 +6,10 @@ from importlib import import_module
 from src.tidebound.config import AgentSettings
 from src.tidebound.llm import ModelClient
 from src.tidebound.runtime.events import trace_operation
+from src.tidebound.runtime.preview import publish_preview
 from src.tidebound.runtime.types import RunRecord
 
+first_reaction = import_module('.N00-FirstReaction', __name__).first_reaction
 conversation_context = import_module('.N01-ConversationContext', __name__).conversation_context
 retrieve_material = import_module('.N02-Retrieve', __name__).retrieve_material
 reading_impression = import_module('.N03-ReadingImpression', __name__).reading_impression
@@ -23,12 +25,12 @@ async def search_workflow(query: str, history: list[RunRecord], record: RunRecor
         history: 当前账号有效对话历史。
         record: 本轮输入和时间线。
         retrieve: 第二节点的受控检索入口，不接受模型指定地址。
-        model: 本轮固定模型渠道。
+        model: 本轮固定的独立搜索模型。
         settings: 本轮配置。
         stop: 执行撤销信号。
 
     Returns:
-        整理后的印象与来源，或供应商安全错误。
+        整理后的印象或供应商安全错误，以及已完成的第一反应。
 
     Raises:
         AgentError: 停止、节点预算或配置错误。
@@ -36,6 +38,18 @@ async def search_workflow(query: str, history: list[RunRecord], record: RunRecor
         OSError: 搜索网络失败。
     """
     with trace_operation(settings, 'workflow', 'websearch') as workflow:
+        if not record.reaction_attempted:
+            record.reaction_attempted = True
+            record.reaction_streaming = True
+            try:
+                reaction = await first_reaction(record.user_content, query, model, settings, stop,
+                                                history=history, timeline_id=record.timeline_id)
+                if reaction is not None:
+                    record.first_reaction = reaction
+                else:
+                    publish_preview('')
+            finally:
+                record.reaction_streaming = False
         context = await conversation_context(history, record, query, model, settings, stop)
         with trace_operation(settings, 'workflow', 'websearch.N02-Retrieve') as outcome:
             result = await retrieve_material(retrieve, stop)
@@ -43,5 +57,8 @@ async def search_workflow(query: str, history: list[RunRecord], record: RunRecor
                 outcome['error_code'] = result['error']
         if 'error' in result:
             workflow['error_code'] = str(result['error'])
-            return result
-        return await reading_impression(context, result, model, settings, stop)
+        else:
+            result = await reading_impression(context, result, model, settings, stop)
+        if record.first_reaction:
+            result = {**result, 'spoken_reaction': record.first_reaction}
+        return result

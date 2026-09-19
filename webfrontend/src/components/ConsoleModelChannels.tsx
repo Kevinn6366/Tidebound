@@ -44,17 +44,17 @@ export default function ConsoleModelChannels({ uid }: { uid: string }): JSX.Elem
     }
   }
 
-  return <section aria-label="主聊天模型来源">
+  return <section className="console-panel console-models" aria-label="主聊天模型来源">
     <h2>主聊天模型来源</h2>
     <p>对本服务所有账号的新对话轮次生效，重启后保留。正在回复的对话及欢迎模型保持原配置。</p>
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
     {!data && !error && <p>正在读取渠道…</p>}
-    <div className="console-view-options">
-      {data?.channels.map(channel => <div key={channel.id}>
-        <h3>{channel.name}</h3>
-        <p>{channel.model || '未配置模型'}</p>
-        <p>{channel.base_url}</p>
+    <div className="console-channel-grid">
+      {data?.channels.map(channel => <div key={channel.id} className={`console-channel-card ${data.selected === channel.id ? 'is-selected' : ''}`}>
+        <div className="console-channel-heading"><span className="console-channel-symbol">{channel.id === 'siliconflow' ? 'S' : 'C'}</span><span className="console-badge">{data.selected === channel.id ? '当前渠道' : channel.ready ? '已配置' : '待配置'}</span></div><h3>{channel.name}</h3>
+        <p className="console-channel-model">{channel.model || '未配置模型'}</p>
+        <p className="console-channel-address">{channel.base_url}</p>
         <button disabled={busy || !channel.ready || data.selected === channel.id}
           aria-pressed={data.selected === channel.id} onClick={() => void switchChannel(channel.id)}>
           {data.selected === channel.id ? '当前使用' : `切换到 ${channel.name}`}
@@ -62,6 +62,6 @@ export default function ConsoleModelChannels({ uid }: { uid: string }): JSX.Elem
         {!channel.ready && <p>未配置：请在后端 .env 填写模型、地址和 API Key，重启后刷新。</p>}
       </div>)}
     </div>
-    <button disabled={busy} onClick={() => setReload(value => value + 1)}>刷新渠道状态</button>
+    <div className="console-panel-actions"><p>“已配置”仅表示配置齐备，不代表供应商连通性已验证。</p><button disabled={busy} onClick={() => setReload(value => value + 1)}>刷新渠道状态</button></div>
   </section>;
 }

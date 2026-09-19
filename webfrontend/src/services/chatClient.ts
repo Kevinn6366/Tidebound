@@ -26,6 +26,9 @@ export interface RunView {
   phase: 'generating' | 'compacting';
   tools: { call_id: string; name: string; arguments: string; result: string | null }[];
   preview: string;
+  first_reaction?: string;
+  reaction_display_started_at?: string | null;
+  preview_stage?: 'reaction' | 'answer';
   user_content: string;
   reply: string | null;
   error: string | null;
@@ -116,6 +119,10 @@ function parseRun(data: unknown): RunView {
     throw new Error('模型没有返回完整回复');
   }
   if (!('context_usage' in data)) throw new Error('缺少上下文用量');
+  if ('first_reaction' in data && typeof data.first_reaction !== 'string') throw new Error('第一反应格式非法');
+  if ('preview_stage' in data && data.preview_stage !== 'reaction' && data.preview_stage !== 'answer') throw new Error('回复阶段格式非法');
+  if ('reaction_display_started_at' in data && data.reaction_display_started_at !== null
+    && (typeof data.reaction_display_started_at !== 'string' || !Number.isFinite(Date.parse(data.reaction_display_started_at)))) throw new Error('第一反应时间格式非法');
   const phase = 'phase' in data ? data.phase : 'generating';
   if (phase !== 'generating' && phase !== 'compacting') throw new Error('执行阶段格式非法');
   return { ...data, phase, context_usage: parseContextUsage(data.context_usage) } as RunView;

@@ -89,6 +89,7 @@ export function useAgentChat(): {
               const messages = run.status === 'completed' ? [
                 ...previous.messages.filter(message => !message.id.startsWith(`${run.run_id}:`)),
                 ...(run.kind === 'chat' ? [{ id: `${run.run_id}:user`, role: 'user' as const, content: run.user_content, kind: run.kind, created_at: run.created_at, time_estimated: false, display_revision: 0, display_pending: false }] : []),
+                ...(run.first_reaction ? [{ id: `${run.run_id}:reaction`, role: 'assistant' as const, content: run.first_reaction, kind: run.kind, created_at: run.reaction_display_started_at || run.completed_at, time_estimated: !run.reaction_display_started_at, display_revision: 0, display_pending: false }] : []),
                 { id: `${run.run_id}:assistant`, role: 'assistant' as const, content: run.reply!, kind: run.kind, created_at: run.display_started_at || (run.display_pending ? null : run.completed_at || run.created_at), time_estimated: !run.display_started_at, display_revision: run.display_revision, display_pending: run.display_pending },
               ] : previous.messages;
               return { ...previous, messages, active_run: null,

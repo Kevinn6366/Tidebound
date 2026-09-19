@@ -52,6 +52,11 @@ class RunRecord(BaseModel):
     user_content: str
     messages: list[Message] = Field(default_factory=list)
     preview: str = Field(default="", exclude=True)
+    first_reaction: str = ""
+    reaction_display_started_at: str | None = None
+    preview_stage: Literal["reaction", "answer"] = Field(default="answer", exclude=True)
+    reaction_streaming: bool = Field(default=False, exclude=True)
+    reaction_attempted: bool = Field(default=False, exclude=True)
     phase: Literal["generating", "compacting"] = Field(default="generating", exclude=True)
     context_usage: ContextUsage | None = None
     prompt_name: str = ""

@@ -310,6 +310,8 @@ class ChatSession:
         # 保存成功后再更新活动对象，写入失败允许下一次展示确认重试。
         self.store.save(owner, record.model_copy(update={"display_started_at": timestamp}))
         record.display_started_at = timestamp
+        if record.preview_stage == "reaction":
+            record.reaction_display_started_at = timestamp
         return record
 
     def prepare_meet(self, owner: str, *, retry: bool = False,
@@ -405,10 +407,22 @@ class ChatSession:
                 content: 当前模型调用累计返回的正文。
             """
             if not stop.is_set() and record.status == "running":
-                if not content:
-                    record.display_revision += 1
-                    record.display_started_at = None
-                record.preview = content
+                if record.reaction_streaming:
+                    record.preview_stage = "reaction"
+                    record.preview = content
+                elif record.first_reaction:
+                    stage = "answer" if content else "reaction"
+                    if record.preview_stage != stage:
+                        record.display_revision += 1
+                        record.display_started_at = record.reaction_display_started_at if stage == "reaction" else None
+                    record.preview_stage = stage
+                    record.preview = content or record.first_reaction
+                else:
+                    if not content:
+                        record.display_revision += 1
+                        record.display_started_at = None
+                    record.preview_stage = "answer"
+                    record.preview = content
 
         def update_context(usage: ContextUsage) -> None:
             """记录本次请求的预算用量供页面和终态记录读取。
@@ -437,7 +451,7 @@ class ChatSession:
                 """仅在主执行确实等待工作流时展示整理状态，摘要正文不进入预览。"""
                 if record.status == "running" and not stop.is_set():
                     record.phase = "compacting"
-                    record.preview = ""
+                    record.preview = record.first_reaction
 
             try:
                 request_system, material = companion_context(request_system, state, settings, record.run_id)
@@ -474,6 +488,8 @@ class ChatSession:
                                      model, settings, stop, registry, update_context, prepare_context)
             if stop.is_set() or record.timeline_id != self.store.current_timeline(owner):
                 raise AgentError("run_stopped", "本次回复已停止。")
+            if record.first_reaction and not record.messages[-1].content.startswith(record.first_reaction):
+                record.messages[-1].content = record.first_reaction + "\n\n" + record.messages[-1].content
             record.completed_at = datetime.now(UTC).isoformat()
             record.messages[-1].created_at = record.completed_at
             record.companion_state = state
@@ -492,6 +508,9 @@ class ChatSession:
             preview_sink.reset(preview_token)
             request_run.reset(context_token)
             record.preview = ""
+            if record.status != "completed":
+                record.first_reaction = ""
+                record.reaction_display_started_at = None
             try:
                 # 检查与原子写之间无 await，停止不能插入成功提交中间。
                 self.store.save(owner, record)

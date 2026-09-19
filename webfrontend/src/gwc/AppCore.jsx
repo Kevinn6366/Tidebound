@@ -2066,7 +2066,7 @@ export default function AppCore({ router }) {
   const activeBgUrl = appMode === 'title' ? (localTitleBgImage || '/app/bg.png') : (currentBgItem ? (currentBgItem.url || currentBgItem.dataUrl || '/app/bg.png') : '/app/bg.png');
   const activeSession = useMemo(() => ({ id: 'atri', title: '与亚托莉的对话', messages: agentChat.session.messages }), [agentChat.session.messages]);
   const activeRun = agentChat.session.active_run;
-  const latestMessage = activeRun ? { id: `${activeRun.run_id}:assistant`, role: 'assistant',
+  const latestMessage = activeRun ? { id: `${activeRun.run_id}:${activeRun.preview_stage === 'reaction' ? 'reaction' : 'assistant'}`, role: 'assistant',
     content: activeRun.preview, isStreaming: true, display_pending: activeRun.display_pending,
     display_revision: activeRun.display_revision } : activeSession?.messages?.[activeSession.messages.length - 1];
 
@@ -2150,6 +2150,8 @@ export default function AppCore({ router }) {
   }, [settings.vnLinesPerPage]);
 
   const pages = latestMessage ? getPages(latestMessage.content) : [""];
+  // 两段流使用不同展示身份，续答从第一页重新逐字呈现。
+  useEffect(() => { setVnPage(0); }, [latestMessage?.id]);
   const currentDisplay = pages[vnPage] || pages[pages.length - 1] || "";
   const streamedDisplay = useStreamingText(appMode === 'game' ? currentDisplay : '', `${appMode}:${latestMessage?.id}:${vnPage}`, Boolean(latestMessage?.isStreaming || latestMessage?.kind === 'meet'));
   // 标题页后台订阅不等于展示；只有聊天区真正开始逐字呈现时才确认时间。

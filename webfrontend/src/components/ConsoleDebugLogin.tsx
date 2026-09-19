@@ -27,8 +27,8 @@ export default function ConsoleDebugLogin({ uid }: { uid: string }): JSX.Element
     finally { setBusy(false); }
   }
 
-  return <section className="console-view-options" aria-label="登录调试">
-    <h2>登录调试</h2>
+  return <section className="console-panel console-debug" aria-label="登录调试">
+    <div className="console-panel-heading"><div><h2>免密码登录</h2><p>仅用于开发调试</p></div><span className={`console-badge ${enabled ? 'console-badge-warning' : ''}`}>{enabled === null ? '读取中' : enabled ? '免密码已开启' : '密码验证已开启'}</span></div>
     <p>开启后，知道用户名即可进入该账号；不存在则创建普通账号。仅开发模式可用，开关会保存，重启后保持。</p>
     <p>关闭会撤销免密码登录会话。自动创建的调试账号没有可用密码，仅能在此模式下登录。</p>
     <button disabled={busy || enabled === null} aria-pressed={enabled === true} onClick={toggle}>

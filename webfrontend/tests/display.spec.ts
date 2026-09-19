@@ -169,28 +169,30 @@ test('管理员登录后在专属 console 持续读取日志', async ({ page }) 
   await expect.poll(async () => (await (await page.request.get(`/api/chat/runs/${runId}`)).json()).status).toBe('completed');
   await page.getByRole('link', { name: 'Console', exact: true }).click();
   await expect(page).toHaveURL(/\/app\/uid-00000001\/console$/);
-  await expect(page.getByRole('heading', { name: '控制台', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '查看完整 LLM 对话上下文' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '概览', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: '查看完整 LLM 对话上下文' })).toBeVisible();
   await expect(page.getByLabel('运行日志', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '查看完整 LLM 对话上下文' }).click();
+  await page.getByRole('link', { name: '查看完整 LLM 对话上下文' }).click();
   await page.getByRole('button', { name: new RegExp(`现在时间是什么.*Run ${runId.slice(0, 8)}`) }).click();
   await expect(page.getByRole('navigation', { name: '本轮模型请求' }).getByRole('button')).toHaveCount(2);
   await page.getByRole('button', { name: '主回复 · 第 1 次请求', exact: true }).click();
-  await expect(page.getByLabel('本次一次性注入')).toHaveCount(0);
+  await expect(page.getByLabel('本次请求注入')).toHaveCount(0);
   await page.getByText('原始请求 JSON（完整）', { exact: true }).click();
   await expect(page.getByLabel('完整模型请求正文')).toContainText('get_current_time');
   await expect(page.getByLabel('完整模型请求正文')).not.toContainText('先获取当前时间再回答');
   await page.getByRole('button', { name: '主回复 · 第 2 次请求', exact: true }).click();
-  await expect(page.getByLabel('本次一次性注入')).toContainText('已注入 system');
+  await expect(page.getByLabel('本次请求注入')).toContainText('本次实际附加到 system');
   await page.getByText('原始请求 JSON（完整）', { exact: true }).click();
   await expect(page.getByLabel('完整模型请求正文')).toContainText('先获取当前时间再回答');
   await page.screenshot({ path: 'test-results/console-context.png' });
-  await page.getByRole('button', { name: '查看日志', exact: true }).click();
+  await page.getByRole('link', { name: '查看日志', exact: true }).click();
   await expect(page.getByLabel('完整模型请求正文')).toHaveCount(0);
+  await page.getByRole('checkbox', { name: '原始终端日志' }).check();
   await expect(page.getByLabel('运行日志', { exact: true })).toContainText('日志控制台测试输出');
   await page.screenshot({ path: 'test-results/admin-console.png' });
   await page.reload();
-  await page.getByRole('button', { name: '查看日志', exact: true }).click();
+  await page.getByRole('link', { name: '查看日志', exact: true }).click();
+  await page.getByRole('checkbox', { name: '原始终端日志' }).check();
   await expect(page.getByLabel('运行日志', { exact: true })).toContainText('日志控制台测试输出');
 });
 
@@ -294,7 +296,7 @@ for (const surface of ['聊天', 'Console']) {
     if (surface === 'Console') {
       await page.request.post('/api/auth/login', { data: { username: 'e2e-admin', password: 'test-admin-password' } });
       await page.goto('/app/uid-00000001/console');
-      await page.getByRole('button', { name: '查看日志', exact: true }).click();
+      await page.getByRole('link', { name: '查看日志', exact: true }).click();
     } else {
       await page.goto('/app/');
       await page.getByRole('button', { name: 'START', exact: true }).click();

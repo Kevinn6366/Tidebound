@@ -98,8 +98,10 @@ def test_search_workflow_uses_siliconflow_while_chat_uses_relay(tmp_path: Path, 
                     'function': {'name': 'search_web', 'arguments': '{"query":"教程"}'}}]}
                 reason = 'tool_calls'
             elif len(requests) == 2:
-                delta = {'content': '{"summary":"想学编程","reason":"找入门资料"}'}
+                delta = {'content': '能动手做点东西就很有趣呢。'}
             elif len(requests) == 3:
+                delta = {'content': '{"summary":"想学编程","reason":"找入门资料"}'}
+            elif len(requests) == 4:
                 delta = {'content': '{"impression":"这份资料适合入门","uncertainty":"仅摘要","source_ids":[0]}'}
             else:
                 delta = {'content': '这份资料看起来挺适合你。'}
@@ -118,6 +120,7 @@ def test_search_workflow_uses_siliconflow_while_chat_uses_relay(tmp_path: Path, 
         assert record.status == 'completed', record.error
         assert requests == [
             ('relay.test', 'Bearer relay-secret', 'relay-model'),
+            ('silicon.test', 'Bearer silicon-secret', 'deepseek-ai/DeepSeek-V4-Flash'),
             ('silicon.test', 'Bearer silicon-secret', 'deepseek-ai/DeepSeek-V4-Flash'),
             ('silicon.test', 'Bearer silicon-secret', 'deepseek-ai/DeepSeek-V4-Flash'),
             ('relay.test', 'Bearer relay-secret', 'relay-model'),

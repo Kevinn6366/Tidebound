@@ -68,7 +68,8 @@ export default function ConsoleLogPanel({ user }: { user: AuthUser }): JSX.Eleme
     if (follow && output.current) output.current.scrollTop = output.current.scrollHeight;
   }, [content, follow]);
 
-  return <section aria-label="运行日志查看区">
+  return <section className="console-panel console-log-panel" aria-label="运行日志查看区">
+    <div className="console-panel-heading"><div><h2>执行记录</h2><p>模型请求 · 工作流节点 · 工具调用</p></div><span className="console-badge">{paused ? '刷新已暂停' : '自动刷新'}</span></div>
     <div className="console-controls">
       <p>{legacy ? '终端日志 · 最近 100 行' : '执行事件 · 最近 500 条'} · {paused ? '已暂停自动刷新' : '每 1.5 秒刷新'}
         {reading ? ' · 读取中…' : ''}{updated ? ` · 最近成功：${updated}` : ''}</p>

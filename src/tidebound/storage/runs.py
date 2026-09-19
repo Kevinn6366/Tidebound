@@ -168,6 +168,8 @@ class RunStore:
         for record in self.list_runs(owner):
             record.user_content = ''
             record.messages = []
+            record.first_reaction = ""
+            record.reaction_display_started_at = None
             record.companion_state = None
             if record.status == 'completed':
                 record.status = 'interrupted'
