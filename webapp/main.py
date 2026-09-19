@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse, Response
 from src.tidebound.config import AgentSettings
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ModelClient
+from src.tidebound.runtime.events import emit_event
 from src.tidebound.runtime.session import ChatSession
 from src.tidebound.storage.users import MysqlSettings, MysqlUserStore, UserStore
 from webapp.auth.middleware import authenticate
@@ -40,13 +41,19 @@ def create_app(settings: WebSettings | None = None, agent_settings: AgentSetting
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         """等待后台执行正常停止后关闭应用。"""
-        yield
-        await chat.close()
+        emit_event(chat.settings, "service", "startup", "ready")
+        try:
+            yield
+        finally:
+            await chat.close()
+            emit_event(chat.settings, "service", "shutdown", "completed")
 
-    application = FastAPI(title="Tidebound WebApp", version="0.0.3", lifespan=lifespan)
+    application = FastAPI(title="Tidebound WebApp", version="0.0.4", lifespan=lifespan)
     application.state.chat = chat
     application.state.settings = settings or WebSettings()
-    application.state.auth = AuthService(user_store or MysqlUserStore(MysqlSettings.from_env()))
+    application.state.auth = AuthService(user_store or MysqlUserStore(MysqlSettings.from_env()),
+                                           development=application.state.chat.settings.mode == "dev",
+                                           debug_state_path=chat.settings.data_dir / "auth" / "debug-login.json")
 
     @application.exception_handler(AgentError)
     async def agent_error(_: Request, error: AgentError) -> JSONResponse:

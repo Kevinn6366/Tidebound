@@ -241,7 +241,9 @@ def test_injection_only_follows_tool_call_and_does_not_enter_history(tmp_path: P
 
     async def scenario() -> None:
         model = InspectingModel()
-        service = ChatSession(AgentSettings(base_url="http://fixture", model="test", data_dir=tmp_path), model)
+        # 本用例验证多步注入，预算留足空间，避免角色文案变化触发压缩。
+        service = ChatSession(AgentSettings(base_url="http://fixture", model="test", data_dir=tmp_path,
+                                            context_limit=32768), model)
         owner, run_id = uuid4().hex, str(uuid4())
         service.start(owner, run_id, "现在几点")
         await service.active[owner].task
@@ -304,7 +306,9 @@ def test_context_reset_stops_old_run_and_survives_restart(tmp_path: Path) -> Non
         assert session_view(service, owner).active_run is None
         assert session_view(service, owner).context_usage.input_used is None
         assert len(session_view(service, other).messages) == 2
-        assert len(service.store.list_runs(owner)) == 2  # 审计文件保留。
+        assert len(service.store.list_runs(owner)) == 2  # 仅保留无正文墓碑用于拒绝旧请求。
+        assert all(not r.messages and not r.user_content and r.companion_state is None
+                   for r in service.store.list_runs(owner))
         with pytest.raises(AgentError) as error:
             service.start(owner, old_id, '旧事实')
         assert error.value.code == 'run_archived'
@@ -315,5 +319,153 @@ def test_context_reset_stops_old_run_and_survives_restart(tmp_path: Path) -> Non
         await restarted.active[owner].task
         assert [message.content for message in model.inputs[0]] == ['全新输入']
         assert len(session_view(restarted, owner).messages) == 2
+
+    asyncio.run(scenario())
+
+
+def test_worldview_run_snapshot_and_budget(tmp_path: Path) -> None:
+    """验证世界观覆盖工具前后、下轮重载、欢迎入口及预算拒绝。
+
+    Args:
+        tmp_path: 隔离的提示词和运行记录目录。
+    """
+    import shutil
+
+    from src.tidebound.config import ROOT
+    from tests.runtime.test_meet import MeetModel
+
+    root = tmp_path / "prompts"
+    shutil.copytree(ROOT / "prompts", root)
+    world = root / "master/world.worldview/world.worldview-zh.md"
+    world.write_text("WORLD_FIRST", encoding="utf-8")
+
+    async def scenario() -> None:
+        """使用受控模型验证实际执行入口，不访问供应商。"""
+        systems: list[str] = []
+
+        class UpdatingModel(ScriptedModel):
+            async def complete(self, system: str, messages: list[Message],
+                               tools: list[dict[str, object]]) -> ModelReply:
+                """记录 system 并模拟 Run 中途修改世界观。
+
+                Args:
+                    system: 当前请求的系统正文。
+                    messages: 当前请求消息链。
+                    tools: 可用工具声明。
+
+                Returns:
+                    预设工具调用或最终回复。
+                """
+                systems.append(system)
+                world.write_text("WORLD_NEXT", encoding="utf-8")
+                return await super().complete(system, messages, tools)
+
+        model = UpdatingModel([tool_reply(), final_reply()])
+        settings = AgentSettings(base_url="http://fixture", model="test", data_dir=tmp_path / "data",
+                                 prompts_dir=root, context_limit=32768)
+        service = ChatSession(settings, model)
+        owner = uuid4().hex
+        run = service.start(owner, str(uuid4()), "几点了")
+        await service.active[owner].task
+        assert run.status == "completed"
+        assert len(systems) == 2
+        assert all(system.count("WORLD_FIRST") == 1 and "WORLD_NEXT" not in system for system in systems)
+        assert all("WORLD_FIRST" not in message.content for message in run.messages)
+        service.start(owner, str(uuid4()), "你好")
+        await service.active[owner].task
+        assert systems[-1].count("WORLD_NEXT") == 1 and "WORLD_FIRST" not in systems[-1]
+        await service.close()
+
+        meet_model = MeetModel()
+        service = ChatSession(settings, meet_model)
+        other = uuid4().hex
+        run = service.prepare_meet(other)
+        await service.active[other].task
+        assert run is not None and run.status == "completed"
+        assert meet_model.inputs[0][0].count("WORLD_NEXT") == 1
+        await service.close()
+
+        world.write_text("世界观" * 20000, encoding="utf-8")
+        blocked = ScriptedModel([final_reply()])
+        service = ChatSession(settings, blocked)
+        run = service.start(owner, str(uuid4()), "超限")
+        await service.active[owner].task
+        assert run.error_code == "context_budget_exceeded"
+        assert not blocked.inputs
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('prepared', [False, True])
+def test_tail_injection_survives_other_tools_and_resets(prepared: bool) -> None:
+    """搜索规则在整个请求末尾独立注入，参与预算但不污染历史或下一 Run。"""
+    from src.tidebound.context.budget import measure_input
+    from src.tidebound.context.compaction import PreparedContext
+    from src.tidebound.prompting import load_tool_injections
+    from src.tidebound.storage.model_requests import request_injection
+
+    async def scenario() -> None:
+        systems: list[str] = []
+        audits: list[str | None] = []
+        endings: list[Message] = []
+        measured: list[int] = []
+
+        class CapturingModel(ScriptedModel):
+            async def complete(self, system: str, messages: list[Message],
+                               tools: list[dict[str, object]]) -> ModelReply:
+                """记录最终请求与注入审计。
+
+                Args:
+                    system: 完整系统提示词。
+                    messages: 本次聊天材料。
+                    tools: 可用工具声明。
+
+                Returns:
+                    预设工具或最终回复。
+                """
+                from src.tidebound.storage.model_requests import request_purpose
+                if request_purpose.get() == 'tools.websearch.delivery':
+                    return final_reply()
+                systems.append(system)
+                endings.append(messages[-1])
+                audits.append(request_injection.get())
+                measured.append(measure_input(system, messages, tools))
+                return await super().complete(system, messages, tools)
+
+        async def prepare(system: str, current: list[Message], tools: list[dict[str, object]]) -> PreparedContext:
+            """模拟上下文层在工具规则之后追加其他系统规则。
+
+            Args:
+                system: 已含预算内工具规则的系统内容。
+                current: 本轮必需材料。
+                tools: 当前工具声明。
+
+            Returns:
+                附加规则后的上下文。
+            """
+            system += '\n\nOTHER_CONTEXT_RULE'
+            return PreparedContext(system, list(current), measure_input(system, current, tools))
+
+        settings = AgentSettings(context_limit=65536)
+        tail = load_tool_injections(settings.prompts_dir, ('tools.injection.websearch',))
+        registry = create_tools('UTC')
+        registry['search_web'] = {'description': '搜索测试', 'arguments': EmptyArguments,
+            'tail_injection': 'tools.injection.websearch', 'execute': lambda _: {'impression': '有限信息'}}
+        model = CapturingModel([tool_reply('search_web'), tool_reply(), final_reply()])
+        current = [Message(role='user', content='想了解近况')]
+        usage = []
+        await agent_loop('BASE', [], current, model, settings, asyncio.Event(), registry,
+                         on_context=usage.append, prepare_context=prepare if prepared else None)
+        assert tail not in systems[0]
+        assert all(tail not in system for system in systems)
+        assert all(message.role == 'system' and message.content == tail for message in endings[1:])
+        assert all(tail in injection for injection in audits[1:])
+        assert all(tail not in message.content for message in current)
+        assert [item.input_used for item in usage] == measured
+        await agent_loop('BASE', [], [Message(role='user', content='下一轮')], model,
+                         settings, asyncio.Event(), registry, prepare_context=prepare if prepared else None)
+        assert tail not in systems[-1]
+        assert endings[-1].role != 'system'
 
     asyncio.run(scenario())

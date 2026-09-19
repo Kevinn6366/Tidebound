@@ -1,3 +1,4 @@
+import { formatMessageTime } from '../services/chatClient';
 import { useAgentChat } from '../hooks/useAgentChat';
 import { useStreamingText } from '../hooks/useStreamingText';
 import ContextBudgetRing from '../components/ContextBudgetRing';
@@ -214,7 +215,7 @@ const DEFAULT_SETTINGS = {
   ttsUrlTemplate: 'http://127.0.0.1:9880/tts?text={text}&text_lang={lang}&ref_audio_path={ref_audio}&prompt_text={ref_text}&prompt_lang={ref_lang}',
   ttsLanguage: 'zh', ttsVolume: 1.0, bgmVolume: 0.3, bgmMode: 'sequential', enableBgmToast: false,
   // ✨ 新增手机端模式开关状态与缩放比例
-  ttsBuiltIn: false, ttsVoiceId: '', enableMobileUI: false, mobileUIScale: 1.0,
+  ttsBuiltIn: false, ttsVoiceId: '', ttsEngine: 'sovits', ttsQwenVoiceId: '', ttsQwenEmotion: 'calm', enableMobileUI: false, mobileUIScale: 1.0,
   storySpriteScale: 1.0, storySpriteX: 0, storySpriteY: 0,
   live2dScale: 0.2, live2dX: 0, live2dY: 0, titleLive2dScale: 0.2, titleLive2dX: 0, titleLive2dY: 0,
   live2dResolution: window.devicePixelRatio || 1, // ✨ 新增：模型渲染分辨率精度
@@ -2055,7 +2056,7 @@ export default function AppCore({ router }) {
       setInputValue('');
       setSelectedFiles([]);
       setVnPage(0);
-      showToast('上下文已清空，可以开始新的调试对话。', 'success');
+      showToast('上下文、历史对话与派生资料已清空。', 'success');
     } catch (error) {
       showToast(error.message || '清空上下文失败', 'error');
     }
@@ -2065,8 +2066,9 @@ export default function AppCore({ router }) {
   const activeBgUrl = appMode === 'title' ? (localTitleBgImage || '/app/bg.png') : (currentBgItem ? (currentBgItem.url || currentBgItem.dataUrl || '/app/bg.png') : '/app/bg.png');
   const activeSession = useMemo(() => ({ id: 'atri', title: '与亚托莉的对话', messages: agentChat.session.messages }), [agentChat.session.messages]);
   const activeRun = agentChat.session.active_run;
-  const latestMessage = activeRun ? { id: `${activeRun.run_id}:assistant`, role: 'assistant',
-    content: activeRun.preview, isStreaming: true } : activeSession?.messages?.[activeSession.messages.length - 1];
+  const latestMessage = activeRun ? { id: `${activeRun.run_id}:${activeRun.preview_stage === 'reaction' ? 'reaction' : 'assistant'}`, role: 'assistant',
+    content: activeRun.preview, isStreaming: true, display_pending: activeRun.display_pending,
+    display_revision: activeRun.display_revision } : activeSession?.messages?.[activeSession.messages.length - 1];
 
   const triggerShortcut = (id, defaultAction, e) => {
       if (typeof window.triggerShortcut === 'function') {
@@ -2148,8 +2150,19 @@ export default function AppCore({ router }) {
   }, [settings.vnLinesPerPage]);
 
   const pages = latestMessage ? getPages(latestMessage.content) : [""];
+  // 两段流使用不同展示身份，续答从第一页重新逐字呈现。
+  useEffect(() => { setVnPage(0); }, [latestMessage?.id]);
   const currentDisplay = pages[vnPage] || pages[pages.length - 1] || "";
-  const streamedDisplay = useStreamingText(currentDisplay, `${latestMessage?.id}:${vnPage}`, Boolean(latestMessage?.isStreaming));
+  const streamedDisplay = useStreamingText(appMode === 'game' ? currentDisplay : '', `${appMode}:${latestMessage?.id}:${vnPage}`, Boolean(latestMessage?.isStreaming || latestMessage?.kind === 'meet'));
+  // 标题页后台订阅不等于展示；只有聊天区真正开始逐字呈现时才确认时间。
+  const displayMessageId = latestMessage?.role === 'assistant' ? latestMessage.id : null;
+  const displayRevision = latestMessage?.display_revision ?? 0;
+  const displayPending = Boolean(latestMessage?.display_pending);
+  const hasVisibleReply = appMode === 'game' && !activePluginUI && Boolean(streamedDisplay) && currentDisplay.startsWith(streamedDisplay);
+  const markDisplayed = agentChat.markDisplayed;
+  useEffect(() => {
+    if (hasVisibleReply && displayPending && displayMessageId) void markDisplayed(displayMessageId, displayRevision);
+  }, [hasVisibleReply, displayPending, displayMessageId, displayRevision, markDisplayed]);
   const hasNextPage = vnPage < pages.length - 1;
 
   const handleDialogClick = () => { if (hasNextPage) setVnPage(prev => prev + 1); };
@@ -2452,22 +2465,31 @@ export default function AppCore({ router }) {
 
   const fetchOpenAIModels = async () => { showToast("模型列表接口尚未接入，可保留配置供后续接入", "info"); };
 
+  /**
+   * 在队首音频加载完成后顺序播放，避免未就绪时跳过句子。
+   * @returns 无返回值；推进音频播放队列。
+   */
   const processAudioQueue = useCallback(() => {
     if (isPlayingTTSRef.current || ttsTaskQueueRef.current.length === 0) return;
-    
+
+    // 关键：队首音频若还没加载完成（ready=false），先不播放，等 canplaythrough 回调再来。
+    // 否则 play() 会在音频未就绪时失败，被 catch 跳过 → 丢失该句（新老方案都会丢句的根因）。
+    const head = ttsTaskQueueRef.current[0];
+    if (!head || !head.ready) return;
+
     isPlayingTTSRef.current = true;
     const currentTask = ttsTaskQueueRef.current.shift();
-    
+
     activeAudioRef.current = currentTask.audioObj;
     activeAudioRef.current.volume = ttsVolRef.current;
-    activeAudioRef.current.playbackRate = ttsRateRef.current || 1.0; 
-    
-    activeAudioRef.current.onended = () => { 
-      if (ttsPauseRef.current > 0) { 
-        ttsTimeoutRef.current = setTimeout(() => { isPlayingTTSRef.current = false; processAudioQueue(); }, ttsPauseRef.current); 
-      } else { 
-        isPlayingTTSRef.current = false; processAudioQueue(); 
-      } 
+    activeAudioRef.current.playbackRate = ttsRateRef.current || 1.0;
+
+    activeAudioRef.current.onended = () => {
+      if (ttsPauseRef.current > 0) {
+        ttsTimeoutRef.current = setTimeout(() => { isPlayingTTSRef.current = false; processAudioQueue(); }, ttsPauseRef.current);
+      } else {
+        isPlayingTTSRef.current = false; processAudioQueue();
+      }
     };
 
     activeAudioRef.current.onerror = (e) => {
@@ -2477,43 +2499,93 @@ export default function AppCore({ router }) {
 
     const playPromise = activeAudioRef.current.play();
     if (playPromise !== undefined) {
-        playPromise.catch(e => { 
-          console.warn("TTS 播放被浏览器拦截或失败:", e); 
-          isPlayingTTSRef.current = false; processAudioQueue(); 
+        playPromise.catch(e => {
+          console.warn("TTS 播放被浏览器拦截或失败:", e);
+          isPlayingTTSRef.current = false; processAudioQueue();
         });
     }
   }, []);
 
+  /**
+   * 清理情绪标记并按引擎构造分句音频，等待加载后播放。
+   * @param text - 待朗读文本，可包含上游情绪标签。
+   * @returns 无返回值；添加音频任务，失败时显示提示。
+   */
   const enqueueTTS = useCallback((text) => {
-    if (!settings.ttsEnabled || !settings.ttsUrlTemplate || !text.trim()) return;
+    if (!settings.ttsEnabled || !text.trim()) return;
+
+    // 解析情绪标签 <emotion>标签</emotion>（由回复模型自动输出）
+    let cleanText = text, useEmotion = null;
     try {
-      let url = settings.ttsUrlTemplate
-          .replace('{text}', encodeURIComponent(text.trim()))
-          .replace('{lang}', settings.ttsLanguage);
-
-      if (!settings.ttsRefAudio) {
-          // 未填参考音频：剥离相关参数，让服务端使用自身配置的默认音色
-          // （内置配音由 tts_infer.yaml 指定；外部服务由其自身配置决定）
-          url = url.replace(/([&?])ref_audio_path=\{ref_audio\}/g, '')
-                   .replace(/([&?])prompt_text=\{ref_text\}/g, '')
-                   .replace(/([&?])prompt_lang=\{ref_lang\}/g, '')
-                   .replace(/\?&/, '?').replace(/&$/, '');
+      const em = text.match(/<emotion>\s*([^<]+?)\s*<\/emotion>/i);
+      if (em) {
+        const emotion = em[1].trim();
+        cleanText = text.replace(/<emotion>\s*[^<]+?\s*<\/emotion>/gi, '').trim();
+        useEmotion = emotion || (settings.ttsQwenEmotion && settings.ttsQwenEmotion !== 'calm' ? settings.ttsQwenEmotion : null);
       } else {
-          // 已填参考音频：按原样带入，用于指定音色/克隆
-          url = url.replace('{ref_audio}', encodeURIComponent(settings.ttsRefAudio || ''))
-                   .replace('{ref_text}', encodeURIComponent(settings.ttsRefText || ''))
-                   .replace('{ref_lang}', settings.ttsRefLang || 'zh');
+        useEmotion = (settings.ttsQwenEmotion && settings.ttsQwenEmotion !== 'calm' ? settings.ttsQwenEmotion : null);
       }
-      
-      const preloader = new window.Audio();
-      preloader.preload = 'auto';
-      preloader.src = url;
-      preloader.load(); 
+    } catch (e) { showToast("配音文本处理失败", "error"); return; }
+    if (!cleanText) return;
 
-      ttsTaskQueueRef.current.push({ text, url, audioObj: preloader });
-      processAudioQueue();
-    } catch (error) {}
-  }, [settings, processAudioQueue]);
+    // 单一文本合成并入队（返回是否成功入队）
+    /**
+     * 为单个文本片段预加载音频并追加到顺序队列。
+     * @param seg - 已清理的待朗读片段。
+     * @returns 无返回值；失败时显示提示。
+     */
+    const enqueueSingle = (seg) => {
+      if (!seg) return;
+      try {
+        let url;
+        if (settings.ttsEngine === 'qwen') {
+          const voiceId = settings.ttsQwenVoiceId || settings.ttsVoiceId || '';
+          const params = new URLSearchParams({ text: seg, voice_id: voiceId, ...(useEmotion ? { emotion: useEmotion } : {}) });
+          url = `http://127.0.0.1:9881/tts?${params.toString()}`;
+        } else {
+          if (!settings.ttsUrlTemplate) return;
+          url = settings.ttsUrlTemplate.replace('{text}', encodeURIComponent(seg)).replace('{lang}', settings.ttsLanguage);
+          if (!settings.ttsRefAudio) {
+            url = url.replace(/([&?])ref_audio_path=\{ref_audio\}/g, '').replace(/([&?])prompt_text=\{ref_text\}/g, '')
+                     .replace(/([&?])prompt_lang=\{ref_lang\}/g, '').replace(/\?&/, '?').replace(/&$/, '');
+          } else {
+            url = url.replace('{ref_audio}', encodeURIComponent(settings.ttsRefAudio || ''))
+                     .replace('{ref_text}', encodeURIComponent(settings.ttsRefText || ''))
+                     .replace('{ref_lang}', settings.ttsRefLang || 'zh');
+          }
+        }
+        const preloader = new window.Audio();
+        preloader.preload = 'auto';
+        const task = { text: seg, url, audioObj: preloader, ready: false };
+        // 音频就绪（可播放）后再让它进队播放；加载失败也标记 ready 跳过，避免卡死
+        preloader.addEventListener('canplaythrough', () => { if (!task.ready) { task.ready = true; processAudioQueue(); } });
+        preloader.addEventListener('error', () => { if (!task.ready) { task.ready = true; processAudioQueue(); } });
+        ttsTaskQueueRef.current.push(task);
+        preloader.src = url;
+        preloader.load();
+        processAudioQueue();
+      } catch (e) { showToast("配音音频加载失败", "error"); }
+    };
+
+    // 长文本分句（适度切分：切太细会触发很多次独立推理，GPU 单 worker 串行导致间隔长。
+    // 用较大粒度合句，减少推理次数，同时仍能逐段播放降低首包感知等待）
+    const MIN_SPLIT = 90;   // 低于此长度不切（整段一次推理）
+    if (cleanText.length > MIN_SPLIT) {
+      const parts = cleanText.replace(/\s+/g, ' ').match(/[^。！？!?\n]+[。！？!?\n]?/g) || [cleanText];
+      let chunk = '';
+      const flush = () => { if (chunk.trim()) enqueueSingle(chunk.trim()); chunk = ''; };
+      for (const part of parts) {
+        if (!part.trim()) continue;
+        // 合并短句，尽量凑到 120 字左右再入队，减少推理次数
+        if ((chunk + part).length > 120) { flush(); }
+        chunk += part;
+      }
+      flush();
+      return;
+    }
+
+    enqueueSingle(cleanText);
+  }, [settings, processAudioQueue, showToast]);
   useEffect(() => { enqueueTTSRef.current = enqueueTTS; }, [enqueueTTS]);
 
  const clearTTSQueue = useCallback(() => {
@@ -2551,7 +2623,7 @@ export default function AppCore({ router }) {
     isLoadingRef.current = true;
 
     try {
-      await agentChat.send({ content: text || '请查看附件', attachments: selectedFiles });
+      await agentChat.send({ content: text || '请查看附件', attachments: selectedFiles, internet_enabled: settings.enableWebSearch === true });
       setInputValue('');
       setSelectedFiles([]);
       setVnPage(0);
@@ -2891,7 +2963,8 @@ export default function AppCore({ router }) {
       `}} />
  
       {getSessionUser()?.role === 'admin' && <DevToolbox resetting={agentChat.resetting}
-        disabled={agentChat.busy && !agentChat.session.active_run} onReset={handleResetContext} />}
+        disabled={agentChat.busy && !agentChat.session.active_run} busy={agentChat.busy}
+        onTestMeet={agentChat.testMeet} onReset={handleResetContext} />}
 
  {/* ✨ 新增：全局备份与恢复进度条 (左上角悬浮) */}
       {backupProgress.visible && (
@@ -3191,10 +3264,12 @@ export default function AppCore({ router }) {
                             ))}
                         </div>
                     )}
-                    {agentChat.error && <p role="alert" className="text-red-200 text-sm">{agentChat.error}</p>}
+                    {agentChat.error && <p role="alert" className="text-red-200 text-sm">{agentChat.error}
+                      {!agentChat.busy && agentChat.canRetryMeet && <button onClick={() => agentChat.retryMeet()} className="ml-3 underline">重试问候</button>}
+                    </p>}
                     {agentChat.busy && <div className="flex items-center justify-between text-white/80 text-sm mb-2">
                       <span role="status">{agentChat.session.active_run?.phase === 'compacting'
-                        ? '正在整理上下文…' : '亚托莉正在回复…'}</span>
+                        ? '正在整理上下文…' : agentChat.session.active_run?.kind === 'meet' ? '正在准备问候…' : '亚托莉正在回复…'}</span>
                       <button aria-label="停止回复" onClick={() => agentChat.stop().catch(error => showToast(error.message, 'error'))} className="px-3 py-1 rounded bg-white/15">停止</button>
                     </div>}
                     <div className={`flex items-center w-full ${settings.enableMobileUI ? 'gap-1.5 md:gap-3' : 'gap-3'}`}>
@@ -3616,9 +3691,10 @@ export default function AppCore({ router }) {
           <div className="flex-1 overflow-y-auto p-8 lg:px-32 space-y-6">
 
             {activeSession?.messages?.map((msg, idx) => (
-              <div key={idx} className={`flex flex-col group ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+              <div key={msg.id || idx} className={`flex flex-col group ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div className="flex items-center gap-2 mb-1">
                    <span className="text-xs text-white/40">{msg.role === 'user' ? settings.userName : '亚托莉'}</span>
+                   {msg.created_at && <time dateTime={msg.created_at} className="text-xs text-white/40" title={agentChat.session.timezone}>{msg.time_estimated ? '约 ' : ''}{formatMessageTime(msg.created_at, agentChat.session.timezone)}</time>}
                    <button onClick={() => handleCopyMessage(msg.content)} className="opacity-0 group-hover:opacity-100 text-white/30 hover:text-white transition-all cursor-pointer" title="复制此段对话"><Copy size={12}/></button>
                 </div>
                 <div className={`max-w-[80%] rounded-xl px-5 py-3 text-lg leading-relaxed select-text cursor-text ${msg.role === 'user' ? 'bg-emerald-900/60 text-emerald-50 border border-emerald-500/30 rounded-tr-sm' : `bg-indigo-900/40 text-indigo-50 border border-indigo-500/30 rounded-tl-sm ${msg.isError ? 'border-red-500 text-red-300' : ''}`}`}>

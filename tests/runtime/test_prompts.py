@@ -28,9 +28,10 @@ def test_chat_safety_is_required_and_independent(tmp_path: Path) -> None:
     shutil.copytree(ROOT / "prompts", root)
     safety = root / "master/chat.safety/chat.safety-zh.md"
     safety.write_text("SAFETY_SENTINEL", encoding="utf-8")
+    (root / "master/world.worldview/world.worldview-zh.md").write_text("WORLD_SENTINEL", encoding="utf-8")
     load_character_bundle(root).files[0].write_text("NEW_CHARACTER", encoding="utf-8")
     assert load_character_bundle(root).content == "NEW_CHARACTER"
-    assert load_chat_system(root).content == "NEW_CHARACTER\n\nSAFETY_SENTINEL"
+    assert load_chat_system(root).content == "NEW_CHARACTER\n\nSAFETY_SENTINEL\n\nWORLD_SENTINEL"
     safety.unlink()
     assert load_character_bundle(root).content == "NEW_CHARACTER"
     with pytest.raises(AgentError, match="提示词"):
@@ -75,3 +76,61 @@ def test_tool_injection_is_separate_and_deduplicated(tmp_path: Path) -> None:
     assert load_character_bundle(root).content
     with pytest.raises(AgentError):
         load_tool_injections(root, (purpose,))
+
+
+@pytest.mark.parametrize("state", ["empty", "missing_file", "missing_bundle", "content"])
+def test_optional_worldview(tmp_path: Path, state: str) -> None:
+    """验证世界观独立加载、空白兼容及初始 system 顺序。
+
+    Args:
+        tmp_path: 隔离的提示词目录。
+        state: 世界观正文或注册配置的状态。
+    """
+    import yaml
+
+    from src.tidebound.prompting import load_prompt_bundles
+
+    root = tmp_path / "prompts"
+    shutil.copytree(ROOT / "prompts", root)
+    path = root / "master/world.worldview/world.worldview-zh.md"
+    if state == "missing_file":
+        path.unlink()
+    elif state == "missing_bundle":
+        manifest = root / "master.yaml"
+        data = yaml.safe_load(manifest.read_text())
+        del data["prompts"]["world.worldview"]
+        manifest.write_text(yaml.safe_dump(data), encoding="utf-8")
+    elif state == "content":
+        path.write_text("WORLD_SENTINEL", encoding="utf-8")
+    else:
+        path.write_text(" \n{{/* version */}}\n", encoding="utf-8")
+    base = load_prompt_bundles(root, ("chat.character", "chat.safety"))
+    world = load_prompt_bundles(root, ("world.worldview", "world.worldview"))
+    assert world.content == ("WORLD_SENTINEL" if state == "content" else "")
+    assert load_chat_system(root).content == base.content + ("\n\nWORLD_SENTINEL" if world.content else "")
+    assert load_chat_system(root).name == base.name
+    assert "WORLD_SENTINEL" not in load_character_bundle(root).content
+
+
+@pytest.mark.parametrize("change", ["template", "escape", "directory"])
+def test_invalid_worldview_is_not_silently_ignored(tmp_path: Path, change: str) -> None:
+    """世界观只允许缺失或空白，非法配置仍明确失败。
+
+    Args:
+        tmp_path: 隔离的提示词目录。
+        change: 模拟的非法正文或路径类型。
+    """
+    root = tmp_path / "prompts"
+    shutil.copytree(ROOT / "prompts", root)
+    path = root / "master/world.worldview/world.worldview-zh.md"
+    if change == "template":
+        path.write_text("{{ unknown }}", encoding="utf-8")
+    elif change == "escape":
+        manifest = root / "master.yaml"
+        manifest.write_text(manifest.read_text().replace(
+            "@master/world.worldview/world.worldview-zh.md", "@../missing.md"), encoding="utf-8")
+    else:
+        path.unlink()
+        path.mkdir()
+    with pytest.raises(AgentError):
+        load_chat_system(root)

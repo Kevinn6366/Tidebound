@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import { loadModelRequestBody, loadModelRequestRuns } from '../services/consoleClient';
 import type { ModelRequestDetail, ModelRequestRun } from '../services/consoleClient';
@@ -10,6 +10,9 @@ import type { ModelRequestDetail, ModelRequestRun } from '../services/consoleCli
  * @returns 对话列表、模型请求子菜单及分段上下文。
  */
 export default function ConsoleRequests({ uid }: { uid: string }): JSX.Element {
+  const initialRun = useRef(new URLSearchParams(window.location.hash.split('?')[1]).get('run'));
+  const [filter, setFilter] = useState('');
+  const [loading, setLoading] = useState(true);
   const [runs, setRuns] = useState<ModelRequestRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<ModelRequestRun | null>(null);
   const [selected, setSelected] = useState('');
@@ -25,7 +28,14 @@ export default function ConsoleRequests({ uid }: { uid: string }): JSX.Element {
     async function refresh(): Promise<void> {
       try {
         const result = await loadModelRequestRuns(uid, offset, controller.signal);
-        if (!controller.signal.aborted) { setRuns(result); setError(''); }
+        if (!controller.signal.aborted) {
+          setRuns(result); setError(''); setLoading(false);
+          if (initialRun.current) {
+            const match = result.find(run => run.run_id === initialRun.current);
+            if (match) { setSelectedRun(match); setSelected(match.requests[0]?.request_id ?? ''); }
+            initialRun.current = null;
+          }
+        }
       } catch (failure) {
         if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : '对话列表读取失败');
       } finally {
@@ -65,7 +75,8 @@ export default function ConsoleRequests({ uid }: { uid: string }): JSX.Element {
   // 最后一条 user 是本轮输入；之前的非 system 消息才是历史。
   const currentUserIndex = data?.messages.map(message => message.role).lastIndexOf('user') ?? -1;
   const historyCount = data?.messages.filter((message, index) => index < currentUserIndex && message.role !== 'system').length ?? 0;
-  return <section className="console-requests" aria-label="完整模型请求">
+  const filteredRuns = runs.filter(run => `${run.user_content} ${run.run_id} ${run.owner}`.toLowerCase().includes(filter.toLowerCase()));
+  return <section className="console-requests console-panel" aria-label="完整模型请求">
     <h2>完整 LLM 对话上下文</h2>
     {!activeRun ? <>
       <p>每次发送的消息是一轮对话。进入后可查看这一轮每次发送给 LLM 的完整上下文。</p>
@@ -74,31 +85,33 @@ export default function ConsoleRequests({ uid }: { uid: string }): JSX.Element {
         <span>第 {offset / 50 + 1} 页 · 每页最多 50 轮</span>
         <button disabled={runs.length < 50} onClick={() => setOffset(offset + 50)}>较早对话</button>
       </div>
+      <label className="console-search-label">筛选当前页<input type="search" placeholder="输入对话内容、Run ID 或账号归属" value={filter} onChange={event => setFilter(event.target.value)} /></label>
       <div className="console-run-list">
-        {runs.length === 0 && <p>暂无记录，新对话会显示在这里。</p>}
-        {runs.map(run => <button key={`${run.owner}:${run.run_id}`} onClick={() => openRun(run)}>
-          <strong>{run.user_content || '未记录输入'}</strong>
+        {runs.length === 0 && <p className="console-empty">{error ? '暂时无法读取记录。' : loading ? '正在加载对话…' : '暂无记录，新对话会显示在这里。'}</p>}
+        {runs.length > 0 && filteredRuns.length === 0 && <p className="console-empty">当前页没有匹配的对话。</p>}
+        {filteredRuns.map(run => <button key={`${run.owner}:${run.run_id}`} onClick={() => openRun(run)}>
+          <strong>{run.user_content || (run.requests.some(request => request.purpose === 'chat.meet') ? '登录问候' : '未记录输入')}</strong>
           <span>{new Date(run.created_at).toLocaleString()} · {run.requests.length} 次模型请求</span>
           <small>Run {run.run_id.slice(0, 8)} · 归属 {run.owner}</small>
         </button>)}
       </div>
     </> : <>
       <button onClick={() => { setSelectedRun(null); setSelected(''); }}>返回对话列表</button>
-      <h3 className="console-run-title">{activeRun.user_content || '未记录输入'}</h3>
+      <h3 className="console-run-title">{activeRun.user_content || (activeRun.requests.some(request => request.purpose === 'chat.meet') ? '登录问候' : '未记录输入')}</h3>
       <p>{new Date(activeRun.created_at).toLocaleString()} · {activeRun.requests.length} 次模型请求</p>
       <nav className="console-call-menu" aria-label="本轮模型请求">
         {activeRun.requests.map(request => <button key={request.request_id}
           aria-pressed={selected === request.request_id} onClick={() => setSelected(request.request_id)}>
-          {request.purpose === 'context.compaction' ? '后台压缩' : '主回复'} · 第 {request.step} 次请求
+          {request.purpose === 'tools.websearch.delivery' ? '搜索正式续答' : request.purpose === 'tools.websearch.reaction' ? '搜索第一反应' : request.purpose === 'tools.websearch.context' ? '搜索语境概括' : request.purpose === 'tools.websearch.impression' ? '搜索阅读印象' : request.purpose === 'workflow.followup' ? '跟进摘要' : request.purpose === 'context.compaction' ? '后台压缩' : request.purpose === 'chat.meet' ? '登录问候' : '主回复'} · 第 {request.step} 次请求
         </button>)}
       </nav>
       {detail.id === selected && detail.error && <p role="alert" className="account-error">{detail.error}</p>}
-      {!data ? <p>正在读取完整上下文…</p> : <>
-        {data.injection !== '' && <section className="console-injection" aria-label="本次一次性注入">
-          <h3>本次一次性注入</h3>
+      {!data ? <p>{detail.id === selected && detail.error ? '无法显示该请求正文。' : '正在读取完整上下文…'}</p> : <>
+        {data.injection !== '' && <section className="console-injection" aria-label="本次请求注入">
+          <h3>本次请求注入</h3>
           {data.injection === null ? <p>旧记录未单独保存注入标记，请查看下方 system 正文；这不代表没有注入。</p>
             : <>
-              <p>已注入 system，仅对这一次请求生效。</p><pre>{data.injection}</pre>
+              <p>本次实际附加到 system 的规则，包含持续至本轮结束的规则。</p><pre>{data.injection}</pre>
             </>}
         </section>}
         {historyCount > 0 && <button aria-expanded={!historyCollapsed} onClick={() => setHistoryCollapsed(!historyCollapsed)}>

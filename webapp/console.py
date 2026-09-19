@@ -3,7 +3,10 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
+from pydantic import BaseModel, ConfigDict
 
+from src.tidebound.runtime.model_channels import ChannelsView
+from src.tidebound.storage.model_channel import ChannelSelection
 from src.tidebound.storage.model_requests import ModelRequestStore, RequestRunSummary, RequestSnapshot, RequestSummary
 from webapp.auth.dependencies import require_owner
 from webapp.console_log import ConsoleLog, read_debug_log
@@ -27,7 +30,14 @@ def get_console_log(uid: str, request: Request) -> ConsoleLog:
         OSError: 文件读取失败，不伪装成无日志。
     """
     require_owner(request, uid, admin=True)
-    return read_debug_log(request.app.state.settings.debug_log_path)
+    result = read_debug_log(request.app.state.settings.debug_log_path)
+    path = request.app.state.chat.settings.data_dir / 'runtime-events.jsonl'
+    events = read_debug_log(path, 500)
+    result.events_content = events.content
+    if len(events.content.splitlines()) < 500:
+        previous = read_debug_log(path.with_suffix('.previous.jsonl'), 500)
+        result.events_content = '\n'.join((previous.content + events.content).splitlines()[-500:])
+    return result
 
 
 @router.get("/api/users/{uid}/console/requests")
@@ -89,3 +99,68 @@ def list_model_request_runs(uid: str, request: Request, offset: int = Query(defa
     """
     require_owner(request, uid, admin=True)
     return ModelRequestStore(request.app.state.chat.settings.data_dir).list_request_runs(offset)
+
+
+@router.get("/api/users/{uid}/console/model-channels")
+def get_model_channels(uid: str, request: Request) -> ChannelsView:
+    """读取主聊天渠道及配置状态，不返回凭据。
+
+    Args:
+        uid: 当前管理员的 UID。
+        request: 含鉴权状态和 runtime 的请求。
+
+    Returns:
+        服务级主模型选择和两项渠道配置状态。
+
+    Raises:
+        HTTPException: 非管理员或跨账号请求。
+        OSError: 持久化选择无法读取。
+    """
+    require_owner(request, uid, admin=True)
+    return request.app.state.chat.channels.view()
+
+
+@router.put("/api/users/{uid}/console/model-channels")
+def select_model_channel(uid: str, selection: ChannelSelection, request: Request) -> ChannelsView:
+    """切换后续主聊天的服务级渠道，当前执行保留原快照。
+
+    Args:
+        uid: 当前管理员的 UID。
+        selection: 只包含预定义渠道标识，不接受地址或凭据。
+        request: 含鉴权状态和 runtime 的请求。
+
+    Returns:
+        持久化成功后的渠道状态。
+
+    Raises:
+        HTTPException: 非管理员或跨账号请求。
+        AgentError: 渠道未配置或运行模式不支持。
+        OSError: 选择保存失败。
+    """
+    require_owner(request, uid, admin=True)
+    return request.app.state.chat.channels.select(selection)
+
+
+class DebugLoginSetting(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    enabled: bool
+
+
+@router.put('/api/users/{uid}/console/debug-login')
+def set_debug_login(uid: str, setting: DebugLoginSetting, request: Request) -> dict[str, bool]:
+    """仅管理员切换本进程免密码调试。
+
+    Args:
+        uid: 当前管理员 UID。
+        setting: 所需开关状态。
+        request: 带登录身份的请求。
+
+    Returns:
+        实际生效状态。
+
+    Raises:
+        HTTPException: 非管理员或跨账号请求。
+        AgentError: 非开发环境。
+    """
+    require_owner(request, uid, admin=True)
+    return {'passwordless_debug': request.app.state.auth.set_passwordless_debug(setting.enabled)}

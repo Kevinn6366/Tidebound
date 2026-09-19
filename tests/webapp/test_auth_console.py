@@ -256,3 +256,16 @@ def test_restart_redirects_pages_but_keeps_api_unauthorized(tmp_path: Path) -> N
         assert response.headers['cache-control'] == 'no-store'
     assert restarted.post('/api/auth/login', json=CREDENTIALS).status_code == 200
     assert restarted.get('/app/uid-00000001').status_code == 200
+
+
+def test_console_runtime_events_available_without_terminal_debug(tmp_path: Path) -> None:
+    """运行事件独立于终端文件，仍受管理员权限保护。"""
+    from src.tidebound.runtime.events import emit_event
+
+    app = make_app(tmp_path)
+    admin = TestClient(app)
+    uid = admin.post('/api/auth/setup', json=CREDENTIALS).json()['uid']
+    emit_event(app.state.chat.settings, 'workflow', 'websearch.N02-Retrieve', 'started', run=('owner', 'run'))
+    result = admin.get(f'/api/users/{uid}/console/log').json()
+    assert 'websearch.N02-Retrieve' in result['events_content']
+    assert TestClient(app).get(f'/api/users/{uid}/console/log').status_code == 401

@@ -12,6 +12,7 @@ from webapp.auth.dependencies import current_user, require_owner
 from webapp.chat_service import (
     ChatMessageInput,
     ContextBudgetInput,
+    DisplayStartInput,
     RunView,
     SessionView,
     run_view,
@@ -196,3 +197,82 @@ async def compact_chat_context(request: Request) -> ContextUsage:
     user = current_user(request)
     require_owner(request, user.uid, admin=True)
     return await request.app.state.chat.compact_context(user.scope)
+
+
+@router.post("/api/chat/meet")
+async def prepare_meet(request: Request) -> SessionView:
+    """登录后检查是否需要问候，立即返回并由后台继续生成。
+
+    Args:
+        request: 已登录账号的请求，不接受外部指定的账号或历史。
+
+    Returns:
+        已有历史、欢迎任务和当前活动状态。
+
+    Raises:
+        AgentError: 配置不合法或正在清空上下文。
+    """
+    service = request.app.state.chat
+    owner = current_user(request).scope
+    service.prepare_meet(owner)
+    return session_view(service, owner)
+
+
+@router.post("/api/chat/meet/retry")
+async def retry_meet(request: Request) -> SessionView:
+    """显式重试失败的欢迎任务，成功的欢迎保持幂等。
+
+    Args:
+        request: 已鉴权的重试请求。
+
+    Returns:
+        重试或复用后的会话状态。
+
+    Raises:
+        AgentError: 当前配置或会话状态不允许生成。
+    """
+    service = request.app.state.chat
+    owner = current_user(request).scope
+    service.prepare_meet(owner, retry=True)
+    return session_view(service, owner)
+
+
+@router.post("/api/chat/meet/test")
+async def test_meet(request: Request) -> SessionView:
+    """让开发管理员主动测试自身欢迎工作流，跳过登录冷却与已完成欢迎去重。
+
+    Args:
+        request: 已鉴权的管理员请求，不接受其他账号或外部历史。
+
+    Returns:
+        新建或复用活动欢迎执行后的会话状态。
+
+    Raises:
+        HTTPException: 未登录或不是管理员。
+        AgentError: 非开发环境、普通对话忙碌或正在清空上下文。
+    """
+    user = current_user(request)
+    require_owner(request, user.uid, admin=True)
+    service = request.app.state.chat
+    service.prepare_meet(user.scope, trigger="manual")
+    return session_view(service, user.scope)
+
+
+@router.post("/api/chat/runs/{run_id}/display")
+async def record_display_start(run_id: UUID, display: DisplayStartInput, request: Request) -> RunView:
+    """接收首次逐字展示确认，保存服务端时间供 Log 使用。
+
+    Args:
+        run_id: 当前用户正在展示的执行 UUID。
+        display: 客户端看到的正文版本，不接受客户端时间。
+        request: 携带已鉴权归属的请求。
+
+    Returns:
+        展示时间已持久化的执行视图。
+
+    Raises:
+        AgentError: 记录不属于用户、正文已失效或尚未生成。
+        OSError: 展示时间保存失败。
+    """
+    return run_view(request.app.state.chat.record_display_start(
+        current_user(request).scope, str(run_id), display.revision))

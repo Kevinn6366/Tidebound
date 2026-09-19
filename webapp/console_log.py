@@ -13,13 +13,15 @@ class ConsoleLog(BaseModel):
     content: str
     exists: bool
     truncated: bool = False
+    events_content: str = ""
 
 
-def read_debug_log(path: Path) -> ConsoleLog:
+def read_debug_log(path: Path, line_limit: int = LOG_TAIL_LINES) -> ConsoleLog:
     """有界读取日志末尾 100 行，兼容追加、截断与文件轮换。
 
     Args:
         path: 由后端配置的固定日志文件，不能来自 URL 参数。
+        line_limit: 服务端固定的最大显示行数。
 
     Returns:
         日志尾部文本；文件尚未创建时返回空内容及不存在状态。
@@ -39,5 +41,5 @@ def read_debug_log(path: Path) -> ConsoleLog:
     lines = data.decode("utf-8", errors="replace").splitlines(keepends=True)
     if offset and len(lines) > 1:
         lines = lines[1:]
-    return ConsoleLog(content="".join(lines[-LOG_TAIL_LINES:]), exists=True,
-                      truncated=bool(offset and len(lines) <= LOG_TAIL_LINES))
+    return ConsoleLog(content="".join(lines[-line_limit:]), exists=True,
+                      truncated=bool(offset or len(lines) > line_limit))

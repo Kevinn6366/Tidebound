@@ -1,6 +1,13 @@
 # 整个 prompts 目录是 atri 的提示词集合，替换内容时整体替换此目录。
 # 模型与凭据由服务端配置；此处只管理提示词包。
 prompts:
+  world.worldview:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: world.worldview-zh
+          segments:
+            - content: "@master/world.worldview/world.worldview-zh.md"
   chat.safety:
     - language: zh
       variants:
@@ -36,3 +43,59 @@ prompts:
           name: tools.injection.timetools-zh
           segments:
             - content: "@master/tools.injection/tools.injection.timetools.md"
+  chat.meet:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: chat.meet-zh
+          segments:
+            - content: "@master/chat.meet/chat.meet-zh.md"
+  workflow.followup:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: workflow.followup-zh
+          segments:
+            - content: "@master/workflow.followup/workflow.followup-zh.md"
+  companion.rules:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: companion.rules-zh
+          segments:
+            - content: "@master/companion.rules/companion.rules-zh.md"
+  tools.websearch.reaction:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.reaction-zh
+          segments:
+            - content: "@master/tools.websearch/reaction.md"
+  tools.websearch.context:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.context-zh
+          segments:
+            - content: "@master/tools.websearch/context.md"
+  tools.websearch.impression:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.impression-zh
+          segments:
+            - content: "@master/tools.websearch/impression.md"
+  tools.injection.websearch:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.injection.websearch-zh
+          segments:
+            - content: "@master/tools.websearch/reply.md"
+  tools.websearch.delivery:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.delivery-zh
+          segments:
+            - content: "@master/tools.websearch/delivery.md"

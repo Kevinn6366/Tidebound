@@ -61,6 +61,9 @@ async def build_reply(payload: dict[str, object]) -> dict[str, object]:
     """
     messages = payload['messages']
     current_user = next(m['content'] for m in reversed(messages) if m['role'] == 'user')
+    if '"event": "first_meet"' in current_user or '"event": "return_meet"' in current_user:
+        await asyncio.sleep(2)
+        return {'choices': [{'message': {'role': 'assistant', 'content': '你来啦，今天也一起聊些有趣的事情吧。'}, 'finish_reason': 'stop'}]}
     if '等待测试' in current_user:
         await asyncio.sleep(5)
     if messages[-1]['role'] == 'tool':

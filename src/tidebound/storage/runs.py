@@ -152,3 +152,30 @@ class RunStore:
             os.replace(temporary, directory / "budget.json")
         finally:
             temporary.unlink(missing_ok=True)
+
+    def delete_conversation_history(self, owner: str) -> None:
+        """主动清空后删除原始对话与摘要，留下无正文的执行墓碑阻止旧请求重放。
+
+        Args:
+            owner: 已切换时间线且活动任务已经退出的账号。
+
+        Raises:
+            OSError: 文件删除或墓碑保存失败；不可宣称清空成功。
+            ValueError: 历史文件损坏。
+        """
+        import shutil
+
+        for record in self.list_runs(owner):
+            record.user_content = ''
+            record.messages = []
+            record.first_reaction = ""
+            record.reaction_display_started_at = None
+            record.companion_state = None
+            if record.status == 'completed':
+                record.status = 'interrupted'
+            record.error_code = 'history_deleted'
+            record.error = None
+            self.save(owner, record)
+        directory = self.root / UUID(owner).hex / 'summaries'
+        if directory.exists():
+            shutil.rmtree(directory)

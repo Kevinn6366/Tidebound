@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from src.tidebound.storage.companion import CompanionState
+
 
 class ToolCall(BaseModel):
     id: str = Field(min_length=1)
@@ -12,8 +14,10 @@ class ToolCall(BaseModel):
 
 
 class Message(BaseModel):
-    role: Literal["user", "assistant", "tool"]
+    role: Literal["system", "user", "assistant", "tool"]
     content: str = ""
+    created_at: str | None = None
+    time_estimated: bool = False
     reasoning_content: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
@@ -34,13 +38,25 @@ class ContextUsage(BaseModel):
 
 
 class RunRecord(BaseModel):
+    internet_enabled: bool = False
+    companion_state: CompanionState | None = None
     run_id: str
     created_at: str
+    completed_at: str | None = None
+    display_started_at: str | None = None
+    display_revision: int = 0
+    track_display_time: bool = False
+    kind: Literal["chat", "meet"] = "chat"
     timeline_id: str = ""
     status: Literal["running", "completed", "stopped", "failed", "interrupted"] = "running"
     user_content: str
     messages: list[Message] = Field(default_factory=list)
     preview: str = Field(default="", exclude=True)
+    first_reaction: str = ""
+    reaction_display_started_at: str | None = None
+    preview_stage: Literal["reaction", "answer"] = Field(default="answer", exclude=True)
+    reaction_streaming: bool = Field(default=False, exclude=True)
+    reaction_attempted: bool = Field(default=False, exclude=True)
     phase: Literal["generating", "compacting"] = Field(default="generating", exclude=True)
     context_usage: ContextUsage | None = None
     prompt_name: str = ""

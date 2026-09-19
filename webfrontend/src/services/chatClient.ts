@@ -3,6 +3,7 @@ import { getSessionUser, requireSession } from './authClient';
 export interface ChatMessageInput {
   run_id: string;
   content: string;
+  internet_enabled?: boolean;
   attachments: { type: string; name: string; data: string }[];
 }
 export interface ContextUsage {
@@ -13,21 +14,32 @@ export interface ContextUsage {
 }
 
 export interface RunView {
+  kind: 'chat' | 'meet';
+  created_at: string;
+  completed_at: string | null;
+  display_started_at: string | null;
+  display_revision: number;
+  display_pending: boolean;
   context_usage: ContextUsage | null;
   run_id: string;
   status: 'running' | 'completed' | 'stopped' | 'failed' | 'interrupted';
   phase: 'generating' | 'compacting';
   tools: { call_id: string; name: string; arguments: string; result: string | null }[];
   preview: string;
+  first_reaction?: string;
+  reaction_display_started_at?: string | null;
+  preview_stage?: 'reaction' | 'answer';
   user_content: string;
   reply: string | null;
   error: string | null;
 }
 export interface SessionView {
+  timezone: string;
+  meet_run: RunView | null;
   context_usage: ContextUsage | null;
   character: 'atri';
   character_name: '亚托莉';
-  messages: { id: string; role: 'user' | 'assistant'; content: string }[];
+  messages: { id: string; role: 'user' | 'assistant'; content: string; kind: 'chat' | 'meet'; created_at: string | null; time_estimated: boolean; display_revision: number; display_pending: boolean }[];
   active_run: RunView | null;
   tool_runs: RunView[];
 }
@@ -82,6 +94,12 @@ function parseContextUsage(data: unknown): ContextUsage | null {
  */
 function parseRun(data: unknown): RunView {
   if (typeof data !== 'object' || data === null || !('run_id' in data) || typeof data.run_id !== 'string'
+    || !('kind' in data) || (data.kind !== 'chat' && data.kind !== 'meet')
+    || !('created_at' in data) || typeof data.created_at !== 'string' || !Number.isFinite(Date.parse(data.created_at))
+    || !('display_started_at' in data) || (data.display_started_at !== null && (typeof data.display_started_at !== 'string' || !Number.isFinite(Date.parse(data.display_started_at))))
+    || !('display_revision' in data) || !Number.isInteger(data.display_revision) || Number(data.display_revision) < 0
+    || !('display_pending' in data) || typeof data.display_pending !== 'boolean'
+    || !('completed_at' in data) || (data.completed_at !== null && (typeof data.completed_at !== 'string' || !Number.isFinite(Date.parse(data.completed_at))))
     || !('status' in data) || !['running', 'completed', 'stopped', 'failed', 'interrupted'].includes(String(data.status))
     || !('preview' in data) || typeof data.preview !== 'string'
     || !('user_content' in data) || typeof data.user_content !== 'string'
@@ -101,6 +119,10 @@ function parseRun(data: unknown): RunView {
     throw new Error('模型没有返回完整回复');
   }
   if (!('context_usage' in data)) throw new Error('缺少上下文用量');
+  if ('first_reaction' in data && typeof data.first_reaction !== 'string') throw new Error('第一反应格式非法');
+  if ('preview_stage' in data && data.preview_stage !== 'reaction' && data.preview_stage !== 'answer') throw new Error('回复阶段格式非法');
+  if ('reaction_display_started_at' in data && data.reaction_display_started_at !== null
+    && (typeof data.reaction_display_started_at !== 'string' || !Number.isFinite(Date.parse(data.reaction_display_started_at)))) throw new Error('第一反应时间格式非法');
   const phase = 'phase' in data ? data.phase : 'generating';
   if (phase !== 'generating' && phase !== 'compacting') throw new Error('执行阶段格式非法');
   return { ...data, phase, context_usage: parseContextUsage(data.context_usage) } as RunView;
@@ -123,6 +145,7 @@ export async function loadChatSession(): Promise<SessionView> {
  */
 function parseSession(data: unknown): SessionView {
   if (typeof data !== 'object' || data === null || !('character' in data) || data.character !== 'atri'
+    || !('timezone' in data) || typeof data.timezone !== 'string' || !('meet_run' in data)
     || !('character_name' in data) || data.character_name !== '亚托莉'
     || !('context_usage' in data)
     || !('tool_runs' in data) || !Array.isArray(data.tool_runs)
@@ -132,10 +155,15 @@ function parseSession(data: unknown): SessionView {
   const messages = data.messages.map((item: unknown): SessionView['messages'][number] => {
     if (typeof item !== 'object' || item === null || !('id' in item) || typeof item.id !== 'string'
       || !('role' in item) || (item.role !== 'user' && item.role !== 'assistant')
+      || !('created_at' in item) || (item.created_at !== null && (typeof item.created_at !== 'string' || !Number.isFinite(Date.parse(item.created_at))))
+      || !('display_revision' in item) || typeof item.display_revision !== 'number' || !Number.isInteger(item.display_revision) || item.display_revision < 0
+      || !('display_pending' in item) || typeof item.display_pending !== 'boolean'
+      || !('time_estimated' in item) || typeof item.time_estimated !== 'boolean'
+      || !('kind' in item) || (item.kind !== 'chat' && item.kind !== 'meet')
       || !('content' in item) || typeof item.content !== 'string') throw new Error('历史消息格式非法');
-    return { id: item.id, role: item.role, content: item.content };
+    return { id: item.id, role: item.role, content: item.content, kind: item.kind, created_at: item.created_at, time_estimated: item.time_estimated, display_revision: item.display_revision, display_pending: item.display_pending };
   });
-  return { character: 'atri', character_name: '亚托莉', context_usage: parseContextUsage(data.context_usage), messages, tool_runs: data.tool_runs.map(parseRun),
+  return { timezone: data.timezone, meet_run: data.meet_run === null ? null : parseRun(data.meet_run), character: 'atri', character_name: '亚托莉', context_usage: parseContextUsage(data.context_usage), messages, tool_runs: data.tool_runs.map(parseRun),
     active_run: data.active_run === null ? null : parseRun(data.active_run) };
 }
 
@@ -257,4 +285,52 @@ export async function compactContext(): Promise<ContextUsage> {
   const usage = parseContextUsage(await request('/api/chat/context/compact', { method: 'POST' }));
   if (!usage) throw new Error('缺少压缩后的预算用量');
   return usage;
+}
+
+/**
+ * 登录后预生成欢迎语，显式重试时才重新执行失败任务。
+ * @param retry - 是否由用户明确点击重试。
+ * @returns 当前会话及复用或新建的欢迎任务。
+ * @throws 配置、权限、网络或响应结构错误。
+ */
+export async function prepareMeet(retry = false): Promise<SessionView> {
+  return parseSession(await request(retry ? '/api/chat/meet/retry' : '/api/chat/meet', { method: 'POST' }));
+}
+
+/**
+ * 按服务端配置时区展示消息发生时间。
+ * @param timestamp - 服务端 UTC 时间。
+ * @param timezone - 会话配置的 IANA 时区。
+ * @returns 带日期和时分的本地时间。
+ */
+export function formatMessageTime(timestamp: string, timezone: string): string {
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: timezone, year: 'numeric', month: '2-digit',
+    day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(timestamp));
+}
+
+/**
+ * 主动测试管理员自身的欢迎工作流，跳过登录冷却与已完成欢迎去重。
+ * @returns 当前会话和欢迎执行，生成完成后正常写入历史。
+ * @throws 无权限、非开发环境、正在普通对话或接口失败。
+ */
+export async function testMeetWorkflow(): Promise<SessionView> {
+  return parseSession(await request('/api/chat/meet/test', { method: 'POST' }));
+}
+
+/**
+ * 确认角色正文开始逐字展示，重复确认不改写时间。
+ * @param runId - 正在展示的执行标识。
+ * @param revision - 当前正文版本，工具调用前的旧预览不能覆盖后续正文时间。
+ * @returns 持久化后的执行状态；正文已切换或停止时返回空，不覆盖当前状态。
+ * @throws 网络、权限或保存失败。
+ */
+export async function recordDisplayStart(runId: string, revision: number): Promise<RunView | null> {
+  const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/display`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision }),
+  });
+  requireSession(response);
+  if (response.status === 409) return null;
+  if (!response.ok) throw new Error('展示时间保存失败，请刷新重试。');
+  return parseRun(await response.json());
 }

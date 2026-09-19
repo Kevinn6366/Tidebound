@@ -13,7 +13,7 @@ import './account.css';
  * @returns 登录页、用户界面或当前管理员的运行日志。
  */
 export default function App(): JSX.Element {
-  const [identity, setIdentity] = useState<{ setup: boolean; user: AuthUser | null } | null>(null);
+  const [identity, setIdentity] = useState<{ setup: boolean; passwordlessDebug: boolean; user: AuthUser | null } | null>(null);
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(window.location.hash.slice(1) || '/main');
   useEffect(() => {
@@ -31,7 +31,7 @@ export default function App(): JSX.Element {
   }
   if (!identity) return <main className="account-screen">{error || '正在读取登录状态…'}</main>;
   const user = identity.user;
-  if (!user) return <AuthPage setup={identity.setup} />;
+  if (!user) return <AuthPage setup={identity.setup} passwordlessDebug={identity.passwordlessDebug} />;
   const path = window.location.pathname.replace(/\/$/, '');
   const home = `/app/${user.uid}`;
   if (path === '/app' || path === '/app/index.html') {
