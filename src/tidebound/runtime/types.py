@@ -14,7 +14,7 @@ class ToolCall(BaseModel):
 
 
 class Message(BaseModel):
-    role: Literal["user", "assistant", "tool"]
+    role: Literal["system", "user", "assistant", "tool"]
     content: str = ""
     created_at: str | None = None
     time_estimated: bool = False

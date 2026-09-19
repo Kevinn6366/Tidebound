@@ -48,7 +48,7 @@ def create_app(settings: WebSettings | None = None, agent_settings: AgentSetting
             await chat.close()
             emit_event(chat.settings, "service", "shutdown", "completed")
 
-    application = FastAPI(title="Tidebound WebApp", version="0.0.3", lifespan=lifespan)
+    application = FastAPI(title="Tidebound WebApp", version="0.0.4", lifespan=lifespan)
     application.state.chat = chat
     application.state.settings = settings or WebSettings()
     application.state.auth = AuthService(user_store or MysqlUserStore(MysqlSettings.from_env()),

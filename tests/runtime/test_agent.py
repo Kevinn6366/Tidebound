@@ -399,7 +399,7 @@ def test_worldview_run_snapshot_and_budget(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize('prepared', [False, True])
 def test_tail_injection_survives_other_tools_and_resets(prepared: bool) -> None:
-    """搜索后的规则到最终调用仍在 system 尾部，不污染历史或下一 Run。"""
+    """搜索规则在整个请求末尾独立注入，参与预算但不污染历史或下一 Run。"""
     from src.tidebound.context.budget import measure_input
     from src.tidebound.context.compaction import PreparedContext
     from src.tidebound.prompting import load_tool_injections
@@ -408,6 +408,7 @@ def test_tail_injection_survives_other_tools_and_resets(prepared: bool) -> None:
     async def scenario() -> None:
         systems: list[str] = []
         audits: list[str | None] = []
+        endings: list[Message] = []
         measured: list[int] = []
 
         class CapturingModel(ScriptedModel):
@@ -423,7 +424,11 @@ def test_tail_injection_survives_other_tools_and_resets(prepared: bool) -> None:
                 Returns:
                     预设工具或最终回复。
                 """
+                from src.tidebound.storage.model_requests import request_purpose
+                if request_purpose.get() == 'tools.websearch.delivery':
+                    return final_reply()
                 systems.append(system)
+                endings.append(messages[-1])
                 audits.append(request_injection.get())
                 measured.append(measure_input(system, messages, tools))
                 return await super().complete(system, messages, tools)
@@ -453,12 +458,14 @@ def test_tail_injection_survives_other_tools_and_resets(prepared: bool) -> None:
         await agent_loop('BASE', [], current, model, settings, asyncio.Event(), registry,
                          on_context=usage.append, prepare_context=prepare if prepared else None)
         assert tail not in systems[0]
-        assert all(system.endswith(tail) and system.count(tail) == 1 for system in systems[1:])
+        assert all(tail not in system for system in systems)
+        assert all(message.role == 'system' and message.content == tail for message in endings[1:])
         assert all(tail in injection for injection in audits[1:])
         assert all(tail not in message.content for message in current)
         assert [item.input_used for item in usage] == measured
         await agent_loop('BASE', [], [Message(role='user', content='下一轮')], model,
                          settings, asyncio.Event(), registry, prepare_context=prepare if prepared else None)
         assert tail not in systems[-1]
+        assert endings[-1].role != 'system'
 
     asyncio.run(scenario())

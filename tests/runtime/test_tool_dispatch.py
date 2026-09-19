@@ -53,10 +53,13 @@ def test_dispatch_keeps_search_tail_rule_and_original_call_id() -> None:
                 Returns:
                     预设搜索请求或最终回复。
                 """
-                if messages[-1].role == 'tool':
-                    assert messages[-1].tool_call_id == 'wrapper'
+                if not tools:
+                    return ModelReply(message=Message(role='assistant', content='这点还不确定。'), finish_reason='stop')
+                if messages[-1].role == 'system':
+                    assert messages[-2].tool_call_id == 'wrapper'
                     tail = load_tool_injections(AgentSettings().prompts_dir, ('tools.injection.websearch',))
-                    assert system.endswith(tail)
+                    assert messages[-1].content == tail
+                    assert tail not in system
                     return ModelReply(message=Message(role='assistant', content='这点还不确定。'), finish_reason='stop')
                 assert tools[0]['function']['name'] == 'use_tool'
                 return ModelReply(message=Message(role='assistant', tool_calls=[ToolCall(id='wrapper', name='use_tool',

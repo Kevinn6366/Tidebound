@@ -16,7 +16,7 @@ Tidebound 是一个以持续关系为核心的角色陪伴项目。角色有自�
 
 我们希望把日常闲聊里的温度，和 Agent 执行时的可靠性放在一起：她可以得意、嘴硬、偶尔胡说八道；保存了什么、调用了什么、事情有没有完成，则应该能够被检查。
 
-**当前版本：v0.03 · 开发阶段 · 当前支持角色：亚托莉（ATRI）。**
+**当前版本：v0.04 · 开发阶段 · 当前支持角色：亚托莉（ATRI）。**
 
 ## 与亚托莉相见
 
@@ -138,17 +138,95 @@ Agent Runtime · 会话协调、执行、停止与提交
 
 账号使用 MySQL；当前对话执行记录、摘要、陪伴状态和请求审计使用本地持久化。原始历史、模型本次可见的上下文，以及摘要和事实各有职责，避免把“全塞进上下文”当成长期记忆。
 
+下面按当前目录展开主要职责，省略缓存、构建产物和部分辅助文件：
+
 ```text
 Tidebound/
-├── webfrontend/       React、TypeScript 与 Galgame 界面
-├── webapp/            FastAPI 通信层、认证与 Console
-├── src/tidebound/     Agent Runtime、上下文、工具、工作流与存储
-├── prompts/           角色、世界观及各工作流提示词
-├── docs/              当前规格、讨论记录与后续方向
-├── tests/             后端与运行时测试
-├── deploy/            MySQL 开发部署配置
-└── legacy/            上游业务参考，不由新应用导入旧 Agent
+├── webfrontend/                        # Web 展示与交互
+│   ├── src/
+│   │   ├── gwc/                        # 基于上游保留的 Galgame 界面与设置
+│   │   ├── components/                 # 登录、Console、开发工具箱与预算展示
+│   │   ├── hooks/                      # 聊天状态与流式文本呈现
+│   │   ├── services/                   # 聊天、认证、日志与模型渠道 API 客户端
+│   │   └── App.tsx                     # 页面入口与路由组织
+│   ├── public/                         # 静态资源与第三方前端库
+│   ├── tests/                          # Playwright 浏览器 E2E
+│   └── legacy/                         # 原始前端参考，不参与构建
+│
+├── webapp/                             # FastAPI 通信与展示适配
+│   ├── main.py                         # 应用组装、生命周期与路由注册
+│   ├── auth/                           # 认证、登录会话、身份与权限校验
+│   ├── chat.py / chat_service.py       # 聊天接口、流式传输与运行时调用适配
+│   ├── console.py / console_log.py     # 管理接口、模型请求与日志读取
+│   ├── ui_routes.py / ui_store.py      # 设置、存档等界面数据的通信与存储
+│   ├── assets.py                       # 角色展示资源管理
+│   └── schemas.py                      # 通信数据结构与输入校验
+│
+├── src/tidebound/                      # Agent 业务内核
+│   ├── runtime/                        # 会话协调与有限执行生命周期
+│   │   ├── session.py                  # 会话入口、并发控制与状态协调
+│   │   ├── agent_loop.py               # 模型调用、工具执行与回复循环
+│   │   ├── compaction.py               # 后台压缩调度与主执行衔接
+│   │   ├── companion.py                # 陪伴资料恢复与上下文注入
+│   │   ├── model_channels.py           # 主聊天模型渠道选择
+│   │   └── events.py / preview.py      # 运行事件与流式预览通道
+│   ├── context/                        # 请求预算与压缩材料规划
+│   ├── tools/
+│   │   ├── registry.py                 # 能力注册、声明与调用校验
+│   │   ├── companion/                  # 历史回看、事实与跟进事项操作
+│   │   ├── internet/                   # 搜索、网页、天气与兴趣更新访问
+│   │   └── getcurrenttime/             # 当前时间查询
+│   ├── workflows/
+│   │   ├── meet/                       # 生成并校验登录欢迎语
+│   │   ├── compaction/                 # 读取历史、规划、生成、校验与提交摘要
+│   │   ├── followup/                   # 跟进事项的摘要整理
+│   │   └── websearch/                  # 首反应、语境概括、检索与阅读印象
+│   ├── storage/                        # 账号、Run、摘要、陪伴状态和请求审计
+│   ├── memory/                         # 预留：独立长期记忆模块
+│   ├── sandbox/                        # 预留：执行隔离，目前未开放代码执行
+│   ├── prompting.py                    # 提示词 bundle 加载、组合与校验
+│   ├── llm.py / llm_stream.py          # 模型请求与流式响应解析
+│   └── config.py                       # 模型与运行时配置
+│
+├── prompts/                            # 提示词唯一内容来源
+│   ├── master.yaml                     # purpose 与提示词文件的映射
+│   ├── master/
+│   │   ├── chat.character/             # 亚托莉的身份、性格与表达
+│   │   ├── chat.safety/                # 对话边界与内部信息表达规则
+│   │   ├── world.worldview/            # 角色来历与世界背景
+│   │   ├── chat.meet/                  # 登录欢迎语规则
+│   │   ├── companion.rules/            # 陪伴资料与跟进能力的使用规则
+│   │   ├── context.compaction/         # 历史摘要生成规则
+│   │   ├── context.injection/          # 摘要作为上下文资料的使用规则
+│   │   ├── tools.injection/            # 工具调用后的专项规则
+│   │   ├── tools.websearch/            # 搜索各节点及续答规则
+│   │   └── workflow.followup/          # 跟进摘要规则
+│   └── RAW/                            # 原作台词资料，不是当前用户历史
+│
+├── docs/
+│   ├── specs/                          # 当前有效的架构与专项规格
+│   ├── architecture/discussions/       # 设计讨论与对话评估记录
+│   ├── experiments/                    # 实验与验收记录
+│   ├── releases/                      # 版本记录
+│   └── future.md                       # 后续方向
+├── tests/
+│   ├── runtime/                        # 执行、工具、工作流与存储行为测试
+│   ├── webapp/                         # 通信、认证与管理员接口测试
+│   └── support/                        # 测试账号存储、模型替身与 E2E 服务
+├── scripts/                            # 提示词检查与上下文实验脚本
+├── shell/                              # Shell 检查入口
+├── deploy/                             # MySQL 开发部署配置
+├── character_analysis/                 # 角色研究资料
+├── legacy/gwcpro/                      # 上游业务参考，不导入旧 Agent
+├── data/                               # 本地运行数据与资源，不进入版本控制
+├── .env.example                        # 配置模板，不含真实凭据
+├── pyproject.toml / uv.lock             # Python 依赖与锁定版本
+├── VERSION                             # 产品版本号
+└── AGENTS.md                           # 仓库开发规范
 ```
+
+`memory/` 与 `sandbox/` 目前仅为职责预留。已有事实与摘要能力分别落在 `storage/`、`context/`、`tools/` 和 `workflows/`，目录存在不代表完整长期记忆或代码执行已经实现。
+
 
 ## Future
 

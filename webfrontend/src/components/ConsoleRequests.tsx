@@ -102,7 +102,7 @@ export default function ConsoleRequests({ uid }: { uid: string }): JSX.Element {
       <nav className="console-call-menu" aria-label="本轮模型请求">
         {activeRun.requests.map(request => <button key={request.request_id}
           aria-pressed={selected === request.request_id} onClick={() => setSelected(request.request_id)}>
-          {request.purpose === 'tools.websearch.reaction' ? '搜索第一反应' : request.purpose === 'tools.websearch.context' ? '搜索语境概括' : request.purpose === 'tools.websearch.impression' ? '搜索阅读印象' : request.purpose === 'workflow.followup' ? '跟进摘要' : request.purpose === 'context.compaction' ? '后台压缩' : request.purpose === 'chat.meet' ? '登录问候' : '主回复'} · 第 {request.step} 次请求
+          {request.purpose === 'tools.websearch.delivery' ? '搜索正式续答' : request.purpose === 'tools.websearch.reaction' ? '搜索第一反应' : request.purpose === 'tools.websearch.context' ? '搜索语境概括' : request.purpose === 'tools.websearch.impression' ? '搜索阅读印象' : request.purpose === 'workflow.followup' ? '跟进摘要' : request.purpose === 'context.compaction' ? '后台压缩' : request.purpose === 'chat.meet' ? '登录问候' : '主回复'} · 第 {request.step} 次请求
         </button>)}
       </nav>
       {detail.id === selected && detail.error && <p role="alert" className="account-error">{detail.error}</p>}

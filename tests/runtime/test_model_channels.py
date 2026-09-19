@@ -124,6 +124,7 @@ def test_search_workflow_uses_siliconflow_while_chat_uses_relay(tmp_path: Path, 
             ('silicon.test', 'Bearer silicon-secret', 'deepseek-ai/DeepSeek-V4-Flash'),
             ('silicon.test', 'Bearer silicon-secret', 'deepseek-ai/DeepSeek-V4-Flash'),
             ('relay.test', 'Bearer relay-secret', 'relay-model'),
+            ('relay.test', 'Bearer relay-secret', 'relay-model'),
         ]
         assert service.channels.view().selected == 'codex789'
         await service.close()

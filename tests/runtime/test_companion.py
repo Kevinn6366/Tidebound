@@ -54,6 +54,7 @@ class CompanionModel:
             return reply(json.dumps({'summary': '面试事项', 'condition': '下次相关交流时'}))
         self.tool_names = [line.split('(', 1)[0] for line in tools[0]['function']['description'].splitlines()[1:]]
         self.inputs.append(messages)
+        messages = [message for message in messages if message.role != 'system']
         if messages[-1].role == 'tool':
             self.last_result = json.loads(messages[-1].content)
             return ModelReply(message=Message(role='assistant', content='已处理'),

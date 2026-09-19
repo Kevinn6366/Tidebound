@@ -16,6 +16,7 @@ from src.tidebound.runtime.preview import publish_preview
 from src.tidebound.runtime.types import ContextUsage, Message, ToolCall
 from src.tidebound.storage.model_requests import request_injection, request_step
 from src.tidebound.tools.registry import ToolMap, invoke_tool_async, resolve_tool_call, tool_definitions
+from src.tidebound.workflows.websearch.delivery import search_reply
 
 
 async def agent_loop(system: str, history: list[list[Message]], current: list[Message],
@@ -52,18 +53,17 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
             raise AgentError("run_stopped", "本次回复已停止。")
         publish_preview("")
         tail = "\n\n".join(tail_rules.values())
-        request_system = "\n\n".join(part for part in (system, injection, tail) if part)
+        request_system = "\n\n".join(part for part in (system, injection) if part)
         current_injection = "\n\n".join(part for part in (injection, tail) if part)
         injection = ""  # 上批工具规则仅用于紧接着的一次请求，不进入消息历史。
+        # 表达规则必须紧邻本次生成；只放在首条 system 末尾仍会被长历史隔开。
+        # 使用请求副本，临时 system 参与预算和审计，但不成为可回忆的对话。
+        request_current = [*current, Message(role='system', content=tail)] if tail else current
         if prepare_context is None:
-            messages = select_messages(request_system, history, current, tools, settings)
+            messages = select_messages(request_system, history, request_current, tools, settings)
         else:
-            prepared = await prepare_context(request_system, current, tools)
+            prepared = await prepare_context(request_system, request_current, tools)
             request_system, messages = prepared.system, prepared.messages
-            if tail:
-                # 预算组装可能追加摘要与陪伴规则；将已计量的规则移到 system 最后，
-                # 不增加内容、不写入消息历史，并覆盖后续工具链的最终回复请求。
-                request_system = request_system.replace('\n\n' + tail, '', 1).rstrip() + '\n\n' + tail
         if stop.is_set():
             raise AgentError("run_stopped", "本次回复已停止。")
         if on_context is not None:
@@ -71,7 +71,10 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
         step_token = request_step.set(step + 1)
         injection_token = request_injection.set(current_injection)
         try:
-            model_task = asyncio.create_task(model.complete(request_system, messages, tools))
+            call = (search_reply(request_system, messages, tools, current, model, settings, stop)
+                    if 'tools.injection.websearch' in tail_rules
+                    else model.complete(request_system, messages, tools))
+            model_task = asyncio.create_task(call)
         finally:
             request_step.reset(step_token)
             request_injection.reset(injection_token)
@@ -89,6 +92,8 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
         if reply.finish_reason not in ("stop", "tool_calls"):
             raise AgentError("model_incomplete", "模型回复未完整结束，本轮未保存。", 502)
         message = reply.message
+        if message.role != 'assistant':
+            raise AgentError('model_incomplete', '模型未返回角色回复，本轮未保存。', 502)
         current.append(message)
         if not message.tool_calls:
             if reply.finish_reason != "stop" or not message.content.strip():

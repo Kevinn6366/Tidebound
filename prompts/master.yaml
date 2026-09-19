@@ -92,3 +92,10 @@ prompts:
           name: tools.injection.websearch-zh
           segments:
             - content: "@master/tools.websearch/reply.md"
+  tools.websearch.delivery:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.delivery-zh
+          segments:
+            - content: "@master/tools.websearch/delivery.md"

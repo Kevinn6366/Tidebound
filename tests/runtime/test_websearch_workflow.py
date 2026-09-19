@@ -42,6 +42,7 @@ class SearchModel:
         Returns:
             可控模型回复。
         """
+        messages = [message for message in messages if message.role != 'system']
         if tools:
             if messages[-1].role == 'tool':
                 self.final = json.loads(messages[-1].content)
@@ -50,6 +51,8 @@ class SearchModel:
             return ModelReply(message=Message(role='assistant', tool_calls=[
                 ToolCall(id='search', name='search_web', arguments='{"query":"教程"}')]), finish_reason='tool_calls')
         purpose = request_purpose.get()
+        if purpose == 'tools.websearch.delivery':
+            return ModelReply(message=Message(role='assistant', content='这份资料挺适合我们刚才聊的方向。'), finish_reason='stop')
         self.inputs.append((purpose, json.loads(messages[-1].content)))
         if purpose == 'tools.websearch.reaction':
             from src.tidebound.runtime.preview import publish_preview
@@ -169,7 +172,8 @@ def test_first_reaction_visible_before_search_and_persists_until_final(tmp_path:
 
         class StagedModel(SearchModel):
             async def complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:
-                if tools and messages[-1].role == 'tool':
+                messages = [message for message in messages if message.role != 'system']
+                if request_purpose.get() == 'tools.websearch.delivery':
                     from src.tidebound.runtime.preview import publish_preview
                     publish_preview('')
                     publish_preview('正式续答片段')
