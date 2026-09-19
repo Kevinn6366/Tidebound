@@ -17,6 +17,13 @@ class AgentSettings(BaseModel):
     base_url: str = ""
     api_key: SecretStr = SecretStr("")
     model: str = ""
+    relay_base_url: str = "https://www.codex789.com/v1"
+    relay_api_key: SecretStr = SecretStr("")
+    relay_model: str = "glm-5.3"
+    search_api_key: SecretStr = SecretStr("")
+    websearch_model: str = "deepseek-ai/DeepSeek-V4-Flash"
+    websearch_base_url: str = ""
+    websearch_api_key: SecretStr = SecretStr("")
     meet_model: str = "glm-5.3-flash"
     meet_base_url: str = ""
     meet_api_key: SecretStr = SecretStr("")
@@ -43,6 +50,13 @@ class AgentSettings(BaseModel):
         """
         load_dotenv(ROOT / ".env", override=False)
         fields = {
+            "relay_base_url": "TIDEBOUND_RELAY_BASE_URL",
+            "relay_api_key": "TIDEBOUND_RELAY_API_KEY",
+            "relay_model": "TIDEBOUND_RELAY_MODEL",
+            "search_api_key": "TIDEBOUND_BOCHA_API_KEY",
+            "websearch_model": "TIDEBOUND_WEBSEARCH_MODEL",
+            "websearch_base_url": "TIDEBOUND_WEBSEARCH_BASE_URL",
+            "websearch_api_key": "TIDEBOUND_WEBSEARCH_API_KEY",
             "meet_model": "TIDEBOUND_MEET_MODEL",
             "meet_base_url": "TIDEBOUND_MEET_BASE_URL",
             "meet_api_key": "TIDEBOUND_MEET_API_KEY",

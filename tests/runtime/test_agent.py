@@ -306,7 +306,9 @@ def test_context_reset_stops_old_run_and_survives_restart(tmp_path: Path) -> Non
         assert session_view(service, owner).active_run is None
         assert session_view(service, owner).context_usage.input_used is None
         assert len(session_view(service, other).messages) == 2
-        assert len(service.store.list_runs(owner)) == 2  # 审计文件保留。
+        assert len(service.store.list_runs(owner)) == 2  # 仅保留无正文墓碑用于拒绝旧请求。
+        assert all(not r.messages and not r.user_content and r.companion_state is None
+                   for r in service.store.list_runs(owner))
         with pytest.raises(AgentError) as error:
             service.start(owner, old_id, '旧事实')
         assert error.value.code == 'run_archived'
@@ -391,5 +393,72 @@ def test_worldview_run_snapshot_and_budget(tmp_path: Path) -> None:
         assert run.error_code == "context_budget_exceeded"
         assert not blocked.inputs
         await service.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('prepared', [False, True])
+def test_tail_injection_survives_other_tools_and_resets(prepared: bool) -> None:
+    """搜索后的规则到最终调用仍在 system 尾部，不污染历史或下一 Run。"""
+    from src.tidebound.context.budget import measure_input
+    from src.tidebound.context.compaction import PreparedContext
+    from src.tidebound.prompting import load_tool_injections
+    from src.tidebound.storage.model_requests import request_injection
+
+    async def scenario() -> None:
+        systems: list[str] = []
+        audits: list[str | None] = []
+        measured: list[int] = []
+
+        class CapturingModel(ScriptedModel):
+            async def complete(self, system: str, messages: list[Message],
+                               tools: list[dict[str, object]]) -> ModelReply:
+                """记录最终请求与注入审计。
+
+                Args:
+                    system: 完整系统提示词。
+                    messages: 本次聊天材料。
+                    tools: 可用工具声明。
+
+                Returns:
+                    预设工具或最终回复。
+                """
+                systems.append(system)
+                audits.append(request_injection.get())
+                measured.append(measure_input(system, messages, tools))
+                return await super().complete(system, messages, tools)
+
+        async def prepare(system: str, current: list[Message], tools: list[dict[str, object]]) -> PreparedContext:
+            """模拟上下文层在工具规则之后追加其他系统规则。
+
+            Args:
+                system: 已含预算内工具规则的系统内容。
+                current: 本轮必需材料。
+                tools: 当前工具声明。
+
+            Returns:
+                附加规则后的上下文。
+            """
+            system += '\n\nOTHER_CONTEXT_RULE'
+            return PreparedContext(system, list(current), measure_input(system, current, tools))
+
+        settings = AgentSettings(context_limit=65536)
+        tail = load_tool_injections(settings.prompts_dir, ('tools.injection.websearch',))
+        registry = create_tools('UTC')
+        registry['search_web'] = {'description': '搜索测试', 'arguments': EmptyArguments,
+            'tail_injection': 'tools.injection.websearch', 'execute': lambda _: {'impression': '有限信息'}}
+        model = CapturingModel([tool_reply('search_web'), tool_reply(), final_reply()])
+        current = [Message(role='user', content='想了解近况')]
+        usage = []
+        await agent_loop('BASE', [], current, model, settings, asyncio.Event(), registry,
+                         on_context=usage.append, prepare_context=prepare if prepared else None)
+        assert tail not in systems[0]
+        assert all(system.endswith(tail) and system.count(tail) == 1 for system in systems[1:])
+        assert all(tail in injection for injection in audits[1:])
+        assert all(tail not in message.content for message in current)
+        assert [item.input_used for item in usage] == measured
+        await agent_loop('BASE', [], [Message(role='user', content='下一轮')], model,
+                         settings, asyncio.Event(), registry, prepare_context=prepare if prepared else None)
+        assert tail not in systems[-1]
 
     asyncio.run(scenario())

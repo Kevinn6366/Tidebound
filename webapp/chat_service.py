@@ -34,6 +34,7 @@ class ChatAttachment(BaseModel):
 class ChatMessageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_id: UUID
+    internet_enabled: bool = Field(default=False, strict=True)
     content: str = Field(min_length=1, max_length=24000)
     attachments: list[ChatAttachment] = Field(default_factory=list, max_length=20)
 
@@ -139,7 +140,7 @@ def submit_message(service: ChatSession, owner: str, message: ChatMessageInput) 
     """
     if message.attachments:
         raise AgentError("attachments_not_supported", "v0.01 暂时只支持文字；附件和草稿已保留。", 422)
-    return run_view(service.start(owner, str(message.run_id), message.content))
+    return run_view(service.start(owner, str(message.run_id), message.content, internet_enabled=message.internet_enabled))
 
 
 def session_view(service: ChatSession, owner: str) -> SessionView:

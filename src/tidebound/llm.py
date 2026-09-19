@@ -1,5 +1,6 @@
 """Chat Completions 兼容模型适配，不承担 Agent 循环。"""
 
+import re
 from typing import Protocol
 from uuid import uuid4
 
@@ -10,9 +11,10 @@ from src.tidebound.config import AgentSettings
 from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm_stream import read_stream
+from src.tidebound.runtime.events import trace_operation
 from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.types import Message, ModelReply, ToolCall
-from src.tidebound.storage.model_requests import ModelRequestStore
+from src.tidebound.storage.model_requests import ModelRequestStore, request_purpose
 
 
 def wire_messages(system: str, messages: list[Message]) -> list[dict[str, object]]:
@@ -55,6 +57,23 @@ class ChatCompletionsClient:
         self.settings = settings
 
     async def complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:
+        """记录模型调用的开始、完成、耗时及失败，不记录正文。
+
+        Args:
+            system: 本次系统规则。
+            messages: 已选取的请求材料。
+            tools: 当前允许的工具入口。
+
+        Returns:
+            供应商返回的完整响应。
+
+        Raises:
+            AgentError: 模型连接或响应失败。
+        """
+        with trace_operation(self.settings, 'model', request_purpose.get()):
+            return await self._complete(system, messages, tools)
+
+    async def _complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:
         """调用后端配置的模型并校验完整响应。
 
         Args:
@@ -90,6 +109,8 @@ class ChatCompletionsClient:
                 url = self.settings.base_url.rstrip("/") + "/chat/completions"
                 if stream:
                     async with client.stream("POST", url, headers=headers, json=request) as response:
+                        if response.is_error:
+                            await response.aread()
                         response.raise_for_status()
                         debug.write("连接", "HTTP 200，开始读取模型流\n")
                         return await read_stream(response, debug)
@@ -108,8 +129,28 @@ class ChatCompletionsClient:
                                               reasoning_content=message.get("reasoning_content"), tool_calls=calls),
                               finish_reason=choice["finish_reason"])
         except httpx.HTTPStatusError as error:
-            raise AgentError("model_http_error", f"模型服务返回 HTTP {error.response.status_code}，请检查服务端配置。", 502) from error
+            provider_code = safe_provider_error_code(error.response)
+            detail = f"（服务错误码 {provider_code}）" if provider_code else ""
+            raise AgentError("model_http_error", f"模型服务返回 HTTP {error.response.status_code}{detail}，请检查服务端配置。", 502) from error
         except httpx.HTTPError as error:
             raise AgentError("model_connection_error", "无法连接模型服务或请求超时，请检查服务端配置。", 502) from error
         except (ValueError, KeyError, TypeError, IndexError, AttributeError, ValidationError) as error:
             raise AgentError("invalid_model_response", "模型服务返回了不支持的响应格式。", 502) from error
+
+
+def safe_provider_error_code(response: httpx.Response) -> str:
+    """仅提取供应商短错误码供定位限流，不公开响应正文或请求资料。
+
+    Args:
+        response: 已读取正文的失败 HTTP 响应。
+
+    Returns:
+        仅含数字、字母、下划线或连字符的短错误码；其他格式返回空串。
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return ''
+    error = payload.get('error') if isinstance(payload, dict) else None
+    code = str(error.get('code', '')) if isinstance(error, dict) else ''
+    return code if re.fullmatch(r'[A-Za-z0-9_-]{1,32}', code) else ''

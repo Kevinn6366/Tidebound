@@ -5,6 +5,7 @@ export interface ConsoleLog {
   content: string;
   exists: boolean;
   truncated: boolean;
+  eventsContent: string;
 }
 
 /**
@@ -22,7 +23,8 @@ export async function loadConsoleLog(uid: string, signal: AbortSignal): Promise<
     || !('content' in data) || typeof data.content !== 'string'
     || !('exists' in data) || typeof data.exists !== 'boolean'
     || !('truncated' in data) || typeof data.truncated !== 'boolean') throw new Error('日志响应格式非法');
-  return { filename: data.filename, content: data.content, exists: data.exists, truncated: data.truncated };
+  return { filename: data.filename, content: data.content, exists: data.exists, truncated: data.truncated,
+    eventsContent: 'events_content' in data && typeof data.events_content === 'string' ? data.events_content : '' };
 }
 
 export interface ModelRequestSummary {

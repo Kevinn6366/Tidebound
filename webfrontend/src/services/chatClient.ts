@@ -3,6 +3,7 @@ import { getSessionUser, requireSession } from './authClient';
 export interface ChatMessageInput {
   run_id: string;
   content: string;
+  internet_enabled?: boolean;
   attachments: { type: string; name: string; data: string }[];
 }
 export interface ContextUsage {

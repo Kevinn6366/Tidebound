@@ -245,7 +245,7 @@ def test_background_finishes_after_main_reply_and_reset_discards_late_result(tmp
     async def scenario() -> None:
         settings = make_settings(tmp_path)
         # 保持本测试处于软阈值区间，容纳常驻安全规则及消息时间元数据。
-        settings = settings.model_copy(update={"context_limit": 18432})
+        settings = settings.model_copy(update={"context_limit": 24576})
         waiting = WaitingSummary()
         class MainModel:
             async def complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:
@@ -385,6 +385,7 @@ def test_over_budget_run_exposes_workflow_wait_and_resumes_original_message(
                 requests.append(messages)
                 return ModelReply(message=Message(role="assistant", content="继续回复原消息"), finish_reason="stop")
 
+        settings = settings.model_copy(update={"context_limit": 24576})
         service = ChatSession(settings, MainModel(), summary_model=summary_model)
         owner = uuid4().hex
         seed(service.store, owner)
@@ -446,6 +447,7 @@ def test_session_restart_uses_summary_but_keeps_display_history(tmp_path: Path) 
                 assert json.loads(messages[0].content)["context_summary"] == summary.content
                 assert messages[-1].content == "继续聊"
                 return ModelReply(message=Message(role="assistant", content="好的"), finish_reason="stop")
+        settings = settings.model_copy(update={"context_limit": 24576})
         restarted = ChatSession(settings, MainModel(), summary_model=SummaryModel())
         idle_usage = session_view(restarted, owner).context_usage
         assert idle_usage.input_used is not None
@@ -520,10 +522,11 @@ def test_manual_compaction_below_threshold_reuses_task(tmp_path: Path) -> None:
         owner = str(uuid4())
         settings = make_settings(tmp_path)
         model = WaitingSummary()
+        settings = settings.model_copy(update={"context_limit": 24576})
         session = ChatSession(settings, summary_model=model)
         records = seed(session.store, owner, count=10)
-        prepared, _ = session.compaction.read_context(owner, "", "ROLE_SENTINEL", records, [],
-                                                     tool_definitions(session.tools), settings)
+        system, material, tools = session.companion_budget_material(records, settings)
+        prepared, _ = session.compaction.read_context(owner, "", system, records, material, tools, settings)
         assert not needs_compaction(prepared.input_used, settings)
         first = asyncio.create_task(session.compact_context(owner))
         await model.entered.wait()
@@ -551,7 +554,7 @@ def test_manual_compaction_reset_rejects_late_result(tmp_path: Path) -> None:
     async def exercise() -> None:
         owner = str(uuid4())
         model = WaitingSummary()
-        session = ChatSession(make_settings(tmp_path), summary_model=model)
+        session = ChatSession(make_settings(tmp_path).model_copy(update={"context_limit": 24576}), summary_model=model)
         seed(session.store, owner, count=10)
         task = asyncio.create_task(session.compact_context(owner))
         await model.entered.wait()
@@ -574,7 +577,7 @@ def test_manual_compaction_failure_preserves_history(tmp_path: Path) -> None:
     async def exercise() -> None:
         owner = str(uuid4())
         model = SummaryModel(content="x" * 10000)
-        session = ChatSession(make_settings(tmp_path), summary_model=model)
+        session = ChatSession(make_settings(tmp_path).model_copy(update={"context_limit": 24576}), summary_model=model)
         with pytest.raises(AgentError, match="暂无新增"):
             await session.compact_context(owner)
         seed(session.store, owner, count=10)

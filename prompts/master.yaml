@@ -50,3 +50,38 @@ prompts:
           name: chat.meet-zh
           segments:
             - content: "@master/chat.meet/chat.meet-zh.md"
+  workflow.followup:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: workflow.followup-zh
+          segments:
+            - content: "@master/workflow.followup/workflow.followup-zh.md"
+  companion.rules:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: companion.rules-zh
+          segments:
+            - content: "@master/companion.rules/companion.rules-zh.md"
+  tools.websearch.context:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.context-zh
+          segments:
+            - content: "@master/tools.websearch/context.md"
+  tools.websearch.impression:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.impression-zh
+          segments:
+            - content: "@master/tools.websearch/impression.md"
+  tools.injection.websearch:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.injection.websearch-zh
+          segments:
+            - content: "@master/tools.websearch/reply.md"

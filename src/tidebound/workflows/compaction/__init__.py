@@ -4,6 +4,7 @@ import logging
 from importlib import import_module
 
 from src.tidebound.llm import ChatCompletionsClient, ModelClient
+from src.tidebound.runtime.events import trace_operation
 from src.tidebound.storage.runs import RunStore
 from src.tidebound.storage.summaries import ContextSummary, SummaryStore
 from src.tidebound.workflows.compaction.types import CompactionInput, CompactionPlan, CompactionSource
@@ -35,15 +36,20 @@ async def run_compaction(inputs: CompactionInput, runs: RunStore, summaries: Sum
         OSError: 历史或摘要存储不可用。
     """
     logger.info("Compaction N01-ReadValidHistory owner=%s", inputs.owner)
-    source: CompactionSource = N01.read_source(inputs, summaries)
+    with trace_operation(inputs.settings, 'workflow', 'compaction.N01-ReadValidHistory'):
+        source: CompactionSource = N01.read_source(inputs, summaries)
     logger.info("Compaction N02-PlanCompaction owner=%s", inputs.owner)
-    plan: CompactionPlan | None = N02.build_plan(inputs, source)
+    with trace_operation(inputs.settings, 'workflow', 'compaction.N02-PlanCompaction'):
+        plan: CompactionPlan | None = N02.build_plan(inputs, source)
     if plan is None:
         return None
     logger.info("Compaction N03-GenerateRollingSummary owner=%s", inputs.owner)
-    content: str = await N03.summarize_history(source.previous.content if source.previous else "", plan.records,
+    with trace_operation(plan.settings, 'workflow', 'compaction.N03-GenerateRollingSummary'):
+        content: str = await N03.summarize_history(source.previous.content if source.previous else "", plan.records,
         plan.maximum, plan.prompt.content, model or ChatCompletionsClient(plan.settings), plan.settings)
     logger.info("Compaction N04-ValidateSummary owner=%s", inputs.owner)
-    candidate: ContextSummary = N04.validate_summary(inputs, plan, content)
+    with trace_operation(inputs.settings, 'workflow', 'compaction.N04-ValidateSummary'):
+        candidate: ContextSummary = N04.validate_summary(inputs, plan, content)
     logger.info("Compaction N05-CommitSummary owner=%s", inputs.owner)
-    return N05.commit_summary(inputs.owner, candidate, runs, summaries)
+    with trace_operation(inputs.settings, 'workflow', 'compaction.N05-CommitSummary'):
+        return N05.commit_summary(inputs.owner, candidate, runs, summaries)

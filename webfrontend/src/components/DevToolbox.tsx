@@ -57,7 +57,7 @@ export default function DevToolbox({ resetting, disabled, busy, onReset, onTestM
 
   return <aside className="dev-toolbox" aria-label="Dev 工具箱">
     <header><span className="dev-toolbox-dot" /><h2>Dev 工具箱</h2></header>
-    <button disabled={disabled || resetting} onClick={() => { void onReset(); }}>
+    <button title="同时删除历史对话、摘要、事实、跟进和兴趣资料" disabled={disabled || resetting} onClick={() => { void onReset(); }}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
         <path d="M4 10a8 8 0 1 1 1 7M4 4v6h6" strokeLinecap="round" strokeLinejoin="round" />
       </svg>

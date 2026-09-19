@@ -316,3 +316,32 @@ for (const surface of ['聊天', 'Console']) {
     await expect(page).toHaveURL(/\/app\/$/);
   });
 }
+
+test('联网开关随下一条消息提交，关闭后撤销下一轮权限', async ({ page }) => {
+  await page.goto('/app/');
+  await page.getByRole('button', { name: 'START', exact: true }).click();
+  const input = page.getByPlaceholder(/输入/).first();
+  await expect(input).toBeEnabled();
+  await page.getByRole('button', { name: '联网:关', exact: true }).click();
+  await expect(page.getByRole('button', { name: '联网:开', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await input.fill('联网开启测试');
+  const enabled = page.waitForRequest(request => request.url().endsWith('/api/chat/messages'));
+  await input.press('Enter');
+  const enabledRequest = await enabled;
+  expect(enabledRequest.postDataJSON().internet_enabled).toBe(true);
+  const enabledResponse = await enabledRequest.response();
+  expect(enabledResponse?.status()).toBe(202);
+  const enabledRun = await enabledResponse!.json();
+  await expect.poll(async () => (await (await page.request.get(`/api/chat/runs/${enabledRun.run_id}`)).json()).status).toBe('completed');
+  await expect(input).toBeEnabled();
+  await page.getByRole('button', { name: '联网:开', exact: true }).click();
+  await input.fill('联网关闭测试');
+  const disabled = page.waitForRequest(request => request.url().endsWith('/api/chat/messages'));
+  await input.press('Enter');
+  const disabledRequest = await disabled;
+  expect(disabledRequest.postDataJSON().internet_enabled).toBe(false);
+  const disabledResponse = await disabledRequest.response();
+  expect(disabledResponse?.status()).toBe(202);
+  const disabledRun = await disabledResponse!.json();
+  await expect.poll(async () => (await (await page.request.get(`/api/chat/runs/${disabledRun.run_id}`)).json()).status).toBe('completed');
+});

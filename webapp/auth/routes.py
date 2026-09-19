@@ -3,6 +3,7 @@
 from ipaddress import ip_address
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.tidebound.storage.users import User
 from webapp.auth.dependencies import COOKIE_NAME, current_user
@@ -22,7 +23,8 @@ def set_session(request: Request, response: Response, user: User) -> User:
     Returns:
         当前账号身份。
     """
-    token = request.app.state.auth.issue_session(user, request.cookies.get(COOKIE_NAME))
+    token = request.app.state.auth.issue_session(user, request.cookies.get(COOKIE_NAME),
+        debug_login=request.url.path == "/api/auth/debug-login")
     response.set_cookie(COOKIE_NAME, token, httponly=True, samesite="strict",
                         secure=request.url.scheme == "https", max_age=SESSION_SECONDS)
     return user
@@ -38,7 +40,8 @@ def auth_status(request: Request) -> dict[str, bool]:
     Returns:
         首次启动状态，不包含账号清单。
     """
-    return {"setup_required": request.app.state.auth.setup_required}
+    return {"setup_required": request.app.state.auth.setup_required,
+            "passwordless_debug": request.app.state.auth.passwordless_debug}
 
 
 @router.post("/setup", response_model=User, status_code=201)
@@ -124,3 +127,26 @@ def logout(request: Request, response: Response) -> dict[str, bool]:
     request.app.state.auth.logout(request.cookies.get(COOKIE_NAME))
     response.delete_cookie(COOKIE_NAME)
     return {"ok": True}
+
+
+class DebugLogin(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    username: str = Field(min_length=2, max_length=64, pattern=r"^\S(?:.*\S)?$")
+
+
+@router.post('/debug-login', response_model=User)
+def debug_login(credentials: DebugLogin, request: Request, response: Response) -> User:
+    """按用户名登录开发账号，开关和账号创建由认证服务控制。
+
+    Args:
+        credentials: 仅包含用户名，不允许指定角色。
+        request: 当前请求及认证服务。
+        response: 写入随机登录 Cookie。
+
+    Returns:
+        已验证的调试身份。
+
+    Raises:
+        AgentError: 调试关闭或管理员未初始化。
+    """
+    return set_session(request, response, request.app.state.auth.debug_login(credentials.username))

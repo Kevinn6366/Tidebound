@@ -36,7 +36,7 @@ async def authenticate(request: Request, call_next: Callable[[Request], Awaitabl
     if path.startswith("/app/uid-") and request.state.user is None:
         return RedirectResponse("/app/", status_code=303, headers={"Cache-Control": "no-store"})
     public = {"/api/health", "/api/capabilities", "/api/models", "/api/auth/status",
-              "/api/auth/setup", "/api/auth/login", "/api/auth/register", "/api/auth/logout"}
+              "/api/auth/setup", "/api/auth/login", "/api/auth/debug-login", "/api/auth/register", "/api/auth/logout"}
     private_api = path.startswith(("/api/", "/v1/", "/admin/")) or path == "/admin"
     if private_api and path not in public and request.state.user is None:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401, headers={"Cache-Control": "no-store"})

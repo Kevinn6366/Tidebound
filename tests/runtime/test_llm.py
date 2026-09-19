@@ -46,3 +46,44 @@ def test_http_contract(monkeypatch: pytest.MonkeyPatch, payload: dict[str, objec
             reply = await model.complete('atri', [Message(role='user', content='hello')], [])
             assert reply.message.content == 'answer'
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('provider_code,expected', [
+    ('1302', '（服务错误码 1302）'),
+    ('bad code: secret', ''),
+    ('x' * 33, ''),
+])
+def test_provider_error_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, provider_code: str, expected: str,
+) -> None:
+    """验证流式和普通失败保留短错误码且不泄露供应商正文。
+
+    Args:
+        monkeypatch: 替换网络连接以禁止真实请求。
+        stream: 是否走流式响应读取路径。
+        provider_code: 供应商提供的待校验错误码。
+        expected: 允许出现在客户端错误中的诊断片段。
+    """
+    actual_client = httpx.AsyncClient
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)['stream'] is stream
+        return httpx.Response(429, json={
+            'error': {'code': provider_code, 'message': 'secret response details'},
+        })
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: actual_client(
+        transport=httpx.MockTransport(handle), **kwargs,
+    ))
+
+    async def scenario() -> None:
+        model = ChatCompletionsClient(AgentSettings(
+            base_url='http://fixture/v1', model='fixture', debug=stream,
+        ))
+        with pytest.raises(AgentError) as error:
+            await model.complete('atri', [Message(role='user', content='hello')], [])
+        assert error.value.code == 'model_http_error'
+        assert str(error.value) == f'模型服务返回 HTTP 429{expected}，请检查服务端配置。'
+
+    asyncio.run(scenario())

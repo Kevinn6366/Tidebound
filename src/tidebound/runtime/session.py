@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -18,11 +19,15 @@ from src.tidebound.llm import ChatCompletionsClient, ModelClient
 from src.tidebound.prompting import load_chat_system, load_prompt_bundles
 from src.tidebound.runtime.agent_loop import agent_loop
 from src.tidebound.runtime.compaction import CompactionCoordinator
+from src.tidebound.runtime.companion import companion_context, load_state
+from src.tidebound.runtime.events import emit_event, trace_operation
+from src.tidebound.runtime.model_channels import ModelChannels
 from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.types import ContextUsage, Message, RunRecord
 from src.tidebound.storage.model_requests import request_run
 from src.tidebound.storage.runs import ContextBudget, RunStore
-from src.tidebound.tools.registry import create_tools, tool_definitions
+from src.tidebound.tools.companion.operations import CompanionTools
+from src.tidebound.tools.registry import create_tools, register_companion_tools, tool_definitions
 from src.tidebound.workflows.meet import run_meet
 
 WELCOME_INTERVAL = timedelta(minutes=30)
@@ -54,7 +59,8 @@ class ChatSession:
             ZoneInfoNotFoundError: 配置的时区不可用。
         """
         self.settings = settings
-        self.model = model or ChatCompletionsClient(settings)
+        self.model = model
+        self.channels = ModelChannels(settings)
         self.meet_model = meet_model or model
         self.tools = create_tools(settings.timezone)
         self.store = RunStore(settings.data_dir)
@@ -77,7 +83,26 @@ class ChatSession:
             ValueError: 保存的配置损坏。
         """
         budget = self.store.load_context_budget(owner)
-        return self.settings.model_copy(update={} if budget is None else {"context_limit": budget.context_limit})
+        return self.channels.resolve().model_copy(update={} if budget is None else {"context_limit": budget.context_limit})
+
+    def companion_budget_material(self, records: list[RunRecord], settings: AgentSettings
+                                  ) -> tuple[str, list[Message], list[dict[str, object]]]:
+        """为空闲预算和主动压缩构造与主执行相同的工具、规则和状态资料。
+
+        Args:
+            records: 当前时间线已提交历史。
+            settings: 当前账号预算配置。
+
+        Returns:
+            完整 system、状态资料及最近一次联网权限对应的工具声明。
+        """
+        state = load_state(records)
+        record = records[-1] if records else RunRecord(run_id=str(uuid4()), created_at='', user_content='')
+        registry = create_tools(settings.timezone)
+        service = CompanionTools(records, record, state, self.model or ChatCompletionsClient(settings), settings, asyncio.Event())
+        register_companion_tools(registry, service, internet_enabled=record.internet_enabled)
+        system, material = companion_context(load_chat_system(settings.prompts_dir).content, state, settings, record.run_id)
+        return system, material, tool_definitions(registry)
 
     def compacted_usage(self, owner: str) -> ContextUsage | None:
         """返回后台摘要发布后的当前上下文估算，让空闲页面及时显示释放的空间。
@@ -97,8 +122,8 @@ class ChatSession:
         if self.compaction.summaries.load(owner, timeline, [item.run_id for item in records]) is None:
             return None
         settings = self.settings_for(owner)
-        prepared, _ = self.compaction.read_context(owner, timeline,
-            load_chat_system(settings.prompts_dir).content, records, [], tool_definitions(self.tools), settings)
+        system, material, tools = self.companion_budget_material(records, settings)
+        prepared, _ = self.compaction.read_context(owner, timeline, system, records, material, tools, settings)
         return context_usage(settings, prepared.input_used)
 
     async def compact_context(self, owner: str) -> ContextUsage:
@@ -124,8 +149,9 @@ class ChatSession:
         previous = self.compaction.summaries.load(owner, timeline, [item.run_id for item in records])
         if not records or (previous and len(previous.covered_run_ids) >= len(records)):
             raise AgentError("nothing_to_compact", "暂无新增的已完成对话可压缩。", 409)
-        task = self.compaction.schedule(owner, timeline, load_chat_system(settings.prompts_dir).content,
-            records, [], tool_definitions(self.tools), settings, records[-1].run_id, trigger="manual")
+        system, material, tools = self.companion_budget_material(records, settings)
+        task = self.compaction.schedule(owner, timeline, system,
+            records, material, tools, settings, records[-1].run_id, trigger="manual")
         if task is None:
             raise AgentError("compaction_unavailable", "整理服务正在关闭，请稍后重试。", 503)
         try:
@@ -165,7 +191,8 @@ class ChatSession:
 
     @property
     def configured(self) -> bool:
-        return bool(self.settings.mode == "dev" and self.settings.base_url and self.settings.model)
+        settings = self.channels.resolve()
+        return bool(settings.mode == "dev" and settings.base_url and settings.model)
 
     def records(self, owner: str, *, include_archived: bool = False) -> list[RunRecord]:
         """恢复遗留执行并读取有效时间线，不重放工具。
@@ -210,13 +237,14 @@ class ChatSession:
             raise AgentError("run_not_found", "执行不存在。", 404)
         return record
 
-    def start(self, owner: str, run_id: str, content: str) -> RunRecord:
+    def start(self, owner: str, run_id: str, content: str, *, internet_enabled: bool = False) -> RunRecord:
         """在任何 await 前占用会话，同 ID 不重复执行。
 
         Args:
             owner: 当前开发范围。
             run_id: 客户端执行 UUID，仅在本范围内有效。
             content: 已校验的用户正文。
+            internet_enabled: 本轮是否允许使用联网工具，默认关闭。
 
         Returns:
             新执行或相同 ID 的已有执行。
@@ -235,20 +263,21 @@ class ChatSession:
         if existing:
             if existing.timeline_id != timeline_id:
                 raise AgentError("run_archived", "该执行属于已清空的上下文，不能重新提交。", 409)
-            if existing.user_content != content:
+            if existing.user_content != content or existing.internet_enabled != internet_enabled:
                 raise AgentError("run_id_conflict", "同一执行标识不能用于不同输入。", 409)
             return existing
         if owner in self.active:
             raise AgentError("session_busy", "当前回复尚未结束，请等待或停止后再发送。", 409)
-        url = urlsplit(self.settings.base_url)
-        if not self.configured or url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
+        settings = self.settings_for(owner)
+        url = urlsplit(settings.base_url)
+        if not settings.model or url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
             raise AgentError("model_not_configured", "请在后端 .env 配置模型服务地址、模型名和所需凭据。", 503)
         bundle = load_chat_system(self.settings.prompts_dir)
         record = RunRecord(run_id=run_id, created_at=datetime.now(UTC).isoformat(),
-                           user_content=content, prompt_name=bundle.name, timeline_id=timeline_id, track_display_time=True)
+                           user_content=content, prompt_name=bundle.name, timeline_id=timeline_id, track_display_time=True,
+                           internet_enabled=internet_enabled)
         history = [item for item in records if item.status == "completed"]
         stop = asyncio.Event()
-        settings = self.settings_for(owner)
         self.store.save(owner, record)
         task = asyncio.create_task(self._execute(owner, record, bundle.content, history, stop, settings))
         self.active[owner] = ActiveRun(record, stop, task)
@@ -357,6 +386,18 @@ class ChatSession:
             stop: 设置后不能提交成功结果的停止信号。
             settings: 本轮开始时固定的账号配置快照。
         """
+        state = load_state(history)
+        registry = create_tools(settings.timezone)
+        model = self.model or ChatCompletionsClient(settings)
+        search_settings = settings.model_copy(update={
+            'model': self.settings.websearch_model,
+            'base_url': self.settings.websearch_base_url or self.settings.base_url,
+            'api_key': self.settings.websearch_api_key if self.settings.websearch_api_key.get_secret_value() else self.settings.api_key,
+        })
+        companion = CompanionTools(history, record, state, model, settings, stop,
+                                   websearch_model=self.model or ChatCompletionsClient(search_settings))
+        register_companion_tools(registry, companion, internet_enabled=record.internet_enabled)
+
         def update_preview(content: str) -> None:
             """更新未提交正文，停止后忽略迟到分片。
 
@@ -399,11 +440,14 @@ class ChatSession:
                     record.preview = ""
 
             try:
+                request_system, material = companion_context(request_system, state, settings, record.run_id)
                 return await self.compaction.prepare(owner, record.timeline_id, request_system, history,
-                    current, tools, settings, record.run_id, stop, on_wait=mark_compacting)
+                    [*material, *current], tools, settings, record.run_id, stop, on_wait=mark_compacting)
             finally:
                 record.phase = "generating"
 
+        started_at = time.monotonic()
+        emit_event(settings, "run", record.kind, "started", run=(owner, record.run_id))
         preview_token = preview_sink.set(update_preview)
         context_token = request_run.set((owner, record.run_id))
         record.messages = [] if record.kind == "meet" else [
@@ -422,15 +466,17 @@ class ChatSession:
                     update_context(context_usage(settings, prepared.input_used))
                     # 欢迎先完整生成，页面等待期间不展示未校验的半成品。
                     preview_sink.set(None)
-                    message = await run_meet(prepared, self.meet_model or ChatCompletionsClient(settings), injection, stop)
+                    with trace_operation(settings, 'workflow', 'meet'):
+                        message = await run_meet(prepared, self.meet_model or ChatCompletionsClient(settings), injection, stop)
                     record.messages = [message]
                 else:
                     await agent_loop(system, [item.messages for item in history], record.messages,
-                                     self.model, settings, stop, self.tools, update_context, prepare_context)
+                                     model, settings, stop, registry, update_context, prepare_context)
             if stop.is_set() or record.timeline_id != self.store.current_timeline(owner):
                 raise AgentError("run_stopped", "本次回复已停止。")
             record.completed_at = datetime.now(UTC).isoformat()
             record.messages[-1].created_at = record.completed_at
+            record.companion_state = state
             record.status = "completed"
         except AgentError as error:
             record.status = "stopped" if error.code == "run_stopped" else "failed"
@@ -446,23 +492,28 @@ class ChatSession:
             preview_sink.reset(preview_token)
             request_run.reset(context_token)
             record.preview = ""
-            TerminalDebug(self.settings.debug, record.run_id[:8]).write("执行状态", f"{record.status}: {record.error_code or 'ok'}\n")
             try:
                 # 检查与原子写之间无 await，停止不能插入成功提交中间。
                 self.store.save(owner, record)
             except OSError:
                 record.status, record.error_code = "failed", "persistence_failed"
                 record.error = "回复保存失败，本轮未提交。"
+                emit_event(settings, "storage", "commit_run", "failed", run=(owner, record.run_id), error_code="persistence_failed")
                 logger.error("Run persistence failed: %s", record.run_id)
             else:
+                emit_event(settings, "storage", "commit_run", "completed", run=(owner, record.run_id))
                 if record.status == "completed":
                     try:
                         maintenance = self.settings_for(owner) if record.kind == "meet" else settings
-                        self.compaction.schedule(owner, record.timeline_id, system, [*history, record], [],
-                                                 tool_definitions(self.tools), maintenance, record.run_id)
+                        maintenance_system, material = companion_context(system, state, maintenance, record.run_id)
+                        self.compaction.schedule(owner, record.timeline_id, maintenance_system, [*history, record], material,
+                                                 tool_definitions(registry), maintenance, record.run_id)
                     except (OSError, ValueError):
                         logger.error("Post-commit compaction scheduling failed: %s", record.run_id)
             finally:
+                emit_event(settings, "run", record.kind, record.status, run=(owner, record.run_id),
+                           duration_ms=round((time.monotonic() - started_at) * 1000), error_code=record.error_code or "")
+                TerminalDebug(self.settings.debug, record.run_id[:8]).write("执行状态", f"{record.status}: {record.error_code or 'ok'}\n")
                 self.active.pop(owner, None)
 
     def stop(self, owner: str, run_id: str) -> RunRecord:
@@ -502,6 +553,7 @@ class ChatSession:
                 active.record.preview = ""
                 await asyncio.shield(active.task)
             await self.compaction.cancel(owner)
+            self.store.delete_conversation_history(owner)
         finally:
             self.resetting.discard(owner)
 

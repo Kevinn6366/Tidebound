@@ -2056,7 +2056,7 @@ export default function AppCore({ router }) {
       setInputValue('');
       setSelectedFiles([]);
       setVnPage(0);
-      showToast('上下文已清空，可以开始新的调试对话。', 'success');
+      showToast('上下文、历史对话与派生资料已清空。', 'success');
     } catch (error) {
       showToast(error.message || '清空上下文失败', 'error');
     }
@@ -2621,7 +2621,7 @@ export default function AppCore({ router }) {
     isLoadingRef.current = true;
 
     try {
-      await agentChat.send({ content: text || '请查看附件', attachments: selectedFiles });
+      await agentChat.send({ content: text || '请查看附件', attachments: selectedFiles, internet_enabled: settings.enableWebSearch === true });
       setInputValue('');
       setSelectedFiles([]);
       setVnPage(0);

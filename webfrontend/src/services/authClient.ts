@@ -76,7 +76,7 @@ async function authRequest(path: string, body?: object): Promise<unknown> {
  * @returns 初始化状态及可选账号。
  * @throws 状态格式或网络错误。
  */
-export async function loadIdentity(): Promise<{ setup: boolean; user: AuthUser | null }> {
+export async function loadIdentity(): Promise<{ setup: boolean; passwordlessDebug: boolean; user: AuthUser | null }> {
   sessionStorage.removeItem(USER_KEY);
   const status = await authRequest('status');
   if (typeof status !== 'object' || status === null || !('setup_required' in status)
@@ -85,12 +85,12 @@ export async function loadIdentity(): Promise<{ setup: boolean; user: AuthUser |
   if (response.status === 401) {
     if (window.location.pathname.startsWith('/app/uid-')) requireSession(response);
     if (window.location.hash) window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    return { setup: status.setup_required, user: null };
+    return { setup: status.setup_required, passwordlessDebug: 'passwordless_debug' in status && status.passwordless_debug === true, user: null };
   }
   if (!response.ok) throw new Error('无法读取登录状态');
   const user = parseUser(await response.json());
   sessionStorage.setItem(USER_KEY, JSON.stringify(user));
-  return { setup: status.setup_required, user };
+  return { setup: status.setup_required, passwordlessDebug: 'passwordless_debug' in status && status.passwordless_debug === true, user };
 }
 
 /**
@@ -101,8 +101,8 @@ export async function loadIdentity(): Promise<{ setup: boolean; user: AuthUser |
  * @returns 已建立 Cookie 会话的账号。
  * @throws 后端拒绝或网络错误。
  */
-export async function authenticate(mode: 'login' | 'register' | 'setup', username: string, password: string): Promise<AuthUser> {
-  const user = parseUser(await authRequest(mode, { username, password }));
+export async function authenticate(mode: 'login' | 'register' | 'setup' | 'debug-login', username: string, password: string): Promise<AuthUser> {
+  const user = parseUser(await authRequest(mode, mode === 'debug-login' ? { username } : { username, password }));
   sessionStorage.setItem(USER_KEY, JSON.stringify(user));
   return user;
 }
@@ -116,4 +116,26 @@ export async function logout(): Promise<void> {
   await authRequest('logout', {});
   sessionStorage.removeItem(USER_KEY);
   window.location.assign('/app/');
+}
+
+
+/**
+ * 读取或切换开发免密码调试状态。
+ * @param uid - 当前管理员编号。
+ * @param enabled - 目标状态；省略时只读取。
+ * @returns 后端实际启用状态。
+ * @throws 请求失败或状态格式无效。
+ */
+export async function debugLoginSetting(uid: string, enabled?: boolean): Promise<boolean> {
+  const response = await fetch(enabled === undefined ? '/api/auth/status' : `/api/users/${uid}/console/debug-login`, {
+    credentials: 'same-origin', method: enabled === undefined ? 'GET' : 'PUT',
+    headers: enabled === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: enabled === undefined ? undefined : JSON.stringify({ enabled }),
+  });
+  requireSession(response);
+  if (!response.ok) throw new Error('无法更新免密码调试设置（仅管理员开发模式可用）');
+  const data: unknown = await response.json();
+  if (typeof data !== 'object' || data === null || !('passwordless_debug' in data)
+    || typeof data.passwordless_debug !== 'boolean') throw new Error('调试状态格式非法');
+  return data.passwordless_debug;
 }

@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from src.tidebound.storage.companion import CompanionState
+
 
 class ToolCall(BaseModel):
     id: str = Field(min_length=1)
@@ -36,6 +38,8 @@ class ContextUsage(BaseModel):
 
 
 class RunRecord(BaseModel):
+    internet_enabled: bool = False
+    companion_state: CompanionState | None = None
     run_id: str
     created_at: str
     completed_at: str | None = None
