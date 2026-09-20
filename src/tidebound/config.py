@@ -28,6 +28,12 @@ class AgentSettings(BaseModel):
     meet_base_url: str = ""
     meet_api_key: SecretStr = SecretStr("")
     meet_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    emotion_base_url: str = ""
+    emotion_api_key: SecretStr = SecretStr("")
+    emotion_model: str = ""
+    emotion_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    emotion_max_output_tokens: int = Field(default=2048, ge=1)
+    emotion_context_limit: int = Field(default=32768, ge=2048)
     debug: bool = False
     reasoning_effort: Literal["low", "high", "max"] | None = None
     timezone: str = "Asia/Shanghai"
@@ -61,6 +67,12 @@ class AgentSettings(BaseModel):
             "meet_base_url": "TIDEBOUND_MEET_BASE_URL",
             "meet_api_key": "TIDEBOUND_MEET_API_KEY",
             "meet_timeout_seconds": "TIDEBOUND_MEET_TIMEOUT",
+            "emotion_base_url": "TIDEBOUND_EMOTION_BASE_URL",
+            "emotion_api_key": "TIDEBOUND_EMOTION_API_KEY",
+            "emotion_model": "TIDEBOUND_EMOTION_MODEL",
+            "emotion_timeout_seconds": "TIDEBOUND_EMOTION_TIMEOUT",
+            "emotion_max_output_tokens": "TIDEBOUND_EMOTION_MAX_OUTPUT_TOKENS",
+            "emotion_context_limit": "TIDEBOUND_EMOTION_CONTEXT_LIMIT",
             "debug": "TIDEBOUND_DEBUG",
             "reasoning_effort": "TIDEBOUND_LLM_REASONING_EFFORT",
             "mode": "TIDEBOUND_MODE", "base_url": "TIDEBOUND_LLM_BASE_URL",
