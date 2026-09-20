@@ -3,7 +3,6 @@ import { useAgentChat } from '../hooks/useAgentChat';
 import { useStreamingText } from '../hooks/useStreamingText';
 import ContextBudgetRing from '../components/ContextBudgetRing';
 import DevToolbox from '../components/DevToolbox';
-import CloudEmotionSettings from '../components/CloudEmotionSettings';
 import { getSessionUser } from '../services/authClient';
 import { frontendFetch as fetch } from '../services/frontendFetch';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -3286,7 +3285,7 @@ export default function AppCore({ router }) {
               </div>
 
               {/* ✨ 快捷栏全面适配：修复字体发黑 Bug，严格限定颜色，同时保留双端隔离 */}
-              <nav aria-label="聊天菜单栏" className={`w-full flex justify-end pointer-events-none z-[9000] ${settings.enableMobileUI ? 'mt-1 md:mt-2' : 'mt-2'}`}>
+              <div className={`w-full flex justify-end pointer-events-none z-[9000] ${settings.enableMobileUI ? 'mt-1 md:mt-2' : 'mt-2'}`}>
                 <div className={`flex flex-wrap justify-end items-center ${settings.dialogOpacity > 0 ? 'backdrop-blur-md' : ''} rounded-xl font-bold shadow-lg transition-colors duration-300 pointer-events-auto text-indigo-200 ${settings.enableMobileUI ? 'px-2 md:px-4 py-1 md:py-2 landscape:py-1 gap-x-2 md:gap-x-4 gap-y-1 md:gap-y-2 text-[10px] sm:text-xs md:text-sm' : 'px-4 py-2 gap-x-5 gap-y-2.5 text-sm'}`} style={{ backgroundColor: hexToRgba(settings.dialogThemeColor, settings.dialogOpacity), border: settings.dialogOpacity > 0 ? `1px solid rgba(255, 255, 255, ${settings.dialogOpacity * 0.2})` : 'none' }} onClick={e => e.stopPropagation()}>
                   
                   {/* ✨ 快捷栏全面挂载拦截器 (triggerShortcut) */}
@@ -3385,7 +3384,6 @@ export default function AppCore({ router }) {
                     </div>
                   )}
                   {!activePluginUI && <ContextBudgetRing usage={agentChat.session.context_usage} />}
-                  {!activePluginUI && getSessionUser()?.role === 'admin' && <CloudEmotionSettings onFeedback={showToast} />}
 
                   {ocTaskId && <span className={`cursor-pointer transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap ${ocVisible ? 'text-blue-300' : 'text-gray-500 hover:text-white'}`} onClick={() => setOcVisible(!ocVisible)} title="显示/隐藏 OpenCode 工作窗"><Square size={12} /> OC窗</span>}
                   
@@ -3399,7 +3397,7 @@ export default function AppCore({ router }) {
                   {/* 强制始终显示设置按钮以防锁死 */}
                   <Settings className="w-4 h-4 cursor-pointer hover:text-white transition-colors shrink-0" onClick={() => { setIsSettingsOpen(true); }} title="系统设置" />
                 </div>
-              </nav>
+              </div>
             </div>
           )}
         </>

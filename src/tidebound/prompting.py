@@ -138,7 +138,6 @@ def load_prompt_bundles(root: Path, purposes: tuple[str, ...]) -> PromptBundle:
         if "chat.character" not in manifest.prompts or any(
             purpose not in {"chat.character", "chat.safety", "chat.meet", "world.worldview",
                             "context.compaction", "context.injection.summary", "workflow.followup", "companion.rules",
-                            "emotion.enhancement", "emotion.enhancement.instruction",
                             "tools.websearch.context", "tools.websearch.impression", "tools.websearch.reaction", "tools.websearch.delivery"}
             and not purpose.startswith("tools.injection.")
             for purpose in manifest.prompts

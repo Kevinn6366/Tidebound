@@ -20,7 +20,6 @@ from src.tidebound.prompting import load_chat_system, load_prompt_bundles
 from src.tidebound.runtime.agent_loop import agent_loop
 from src.tidebound.runtime.compaction import CompactionCoordinator
 from src.tidebound.runtime.companion import companion_context, load_state
-from src.tidebound.runtime.emotion_enhancement import EmotionEnhancement, EmotionEnhancementRun
 from src.tidebound.runtime.events import emit_event, trace_operation
 from src.tidebound.runtime.model_channels import ModelChannels
 from src.tidebound.runtime.preview import preview_sink
@@ -47,8 +46,7 @@ class ChatSession:
     """单进程 dev 服务；任务不随 HTTP 请求结束，范围间状态独立。"""
 
     def __init__(self, settings: AgentSettings, model: ModelClient | None = None,
-                 summary_model: ModelClient | None = None, meet_model: ModelClient | None = None,
-                 emotion_model: ModelClient | None = None) -> None:
+                 summary_model: ModelClient | None = None, meet_model: ModelClient | None = None) -> None:
         """组装账号隔离的聊天与后台工作流服务。
 
         Args:
@@ -56,7 +54,6 @@ class ChatSession:
             model: 普通聊天测试替身，提供时也作为未单独指定的工作流替身。
             summary_model: 独立摘要模型替身，省略时沿用现有摘要配置。
             meet_model: 独立欢迎模型替身，省略时使用欢迎配置或通用测试替身。
-            emotion_model: 独立情感润色模型替身，省略时使用后端云端增强配置。
 
         Raises:
             ZoneInfoNotFoundError: 配置的时区不可用。
@@ -64,7 +61,6 @@ class ChatSession:
         self.settings = settings
         self.model = model
         self.channels = ModelChannels(settings)
-        self.emotion = EmotionEnhancement(settings, emotion_model)
         self.meet_model = meet_model or model
         self.tools = create_tools(settings.timezone)
         self.store = RunStore(settings.data_dir)
@@ -277,14 +273,13 @@ class ChatSession:
         if not settings.model or url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
             raise AgentError("model_not_configured", "请在后端 .env 配置模型服务地址、模型名和所需凭据。", 503)
         bundle = load_chat_system(self.settings.prompts_dir)
-        enhancement = self.emotion.prepare(owner)
         record = RunRecord(run_id=run_id, created_at=datetime.now(UTC).isoformat(),
                            user_content=content, prompt_name=bundle.name, timeline_id=timeline_id, track_display_time=True,
                            internet_enabled=internet_enabled)
         history = [item for item in records if item.status == "completed"]
         stop = asyncio.Event()
         self.store.save(owner, record)
-        task = asyncio.create_task(self._execute(owner, record, bundle.content, history, stop, settings, enhancement))
+        task = asyncio.create_task(self._execute(owner, record, bundle.content, history, stop, settings))
         self.active[owner] = ActiveRun(record, stop, task)
         return record
 
@@ -372,19 +367,17 @@ class ChatSession:
         bundle = load_chat_system(settings.prompts_dir)
         # 开始前验证必需包；失败不会占用会话或产生伪造用户消息。
         load_prompt_bundles(settings.prompts_dir, ("chat.meet",))
-        enhancement = self.emotion.prepare(owner)
         record = RunRecord(run_id=str(uuid4()), created_at=now.isoformat(), kind="meet",
                            user_content="", prompt_name="chat.meet", timeline_id=self.store.current_timeline(owner),
                            track_display_time=True)
         stop = asyncio.Event()
         self.store.save(owner, record)
-        task = asyncio.create_task(self._execute(owner, record, bundle.content, history, stop, settings, enhancement))
+        task = asyncio.create_task(self._execute(owner, record, bundle.content, history, stop, settings))
         self.active[owner] = ActiveRun(record, stop, task)
         return record
 
     async def _execute(self, owner: str, record: RunRecord, system: str,
-                       history: list[RunRecord], stop: asyncio.Event, settings: AgentSettings,
-                       enhancement: EmotionEnhancementRun | None = None) -> None:
+                       history: list[RunRecord], stop: asyncio.Event, settings: AgentSettings) -> None:
         """运行后台任务并在停止资格检查后提交。
 
         Args:
@@ -394,7 +387,6 @@ class ChatSession:
             history: 开始时的有效历史。
             stop: 设置后不能提交成功结果的停止信号。
             settings: 本轮开始时固定的账号配置快照。
-            enhancement: 本轮开始时固定的可选增强配置，后续开关变更不改变本轮。
         """
         state = load_state(history)
         registry = create_tools(settings.timezone)
@@ -404,14 +396,8 @@ class ChatSession:
             'base_url': self.settings.websearch_base_url or self.settings.base_url,
             'api_key': self.settings.websearch_api_key if self.settings.websearch_api_key.get_secret_value() else self.settings.api_key,
         })
-        search_model = self.model or ChatCompletionsClient(search_settings)
-        meet_model = self.meet_model or ChatCompletionsClient(settings)
-        if enhancement is not None:
-            model = enhancement.wrap(model)
-            search_model = enhancement.wrap(search_model)
-            meet_model = enhancement.wrap(meet_model)
         companion = CompanionTools(history, record, state, model, settings, stop,
-                                   websearch_model=search_model)
+                                   websearch_model=self.model or ChatCompletionsClient(search_settings))
         register_companion_tools(registry, companion, internet_enabled=record.internet_enabled)
 
         def update_preview(content: str) -> None:
@@ -495,7 +481,7 @@ class ChatSession:
                     # 欢迎先完整生成，页面等待期间不展示未校验的半成品。
                     preview_sink.set(None)
                     with trace_operation(settings, 'workflow', 'meet'):
-                        message = await run_meet(prepared, meet_model, injection, stop)
+                        message = await run_meet(prepared, self.meet_model or ChatCompletionsClient(settings), injection, stop)
                     record.messages = [message]
                 else:
                     await agent_loop(system, [item.messages for item in history], record.messages,

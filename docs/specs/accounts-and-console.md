@@ -75,8 +75,6 @@ Console 对应 `tail -n 100 -f data/agent-debug.log` 的页面版本，每秒串
 
 ## 管理员 Dev 工具箱与上下文重置
 
-2026-09-20：[云端情感增强](cloud-emotion-enhancement.md)作为聊天底部菜单栏的独立功能入口，已移出 Dev 工具箱。`GET/PUT /api/chat/emotion-enhancement` 仍限 dev 管理员本人，严格布尔开关按 scope 独立保存，默认关闭、下一轮生效；不接收或返回 Key。Console 用 `emotion.enhancement` 标识二次润色请求。
-
 当前账号仅有 user/admin 两种角色；开发环境中的管理员在主界面侧边显示半透明悬浮“Dev 工具箱”，提供“清空上下文”和“上下文总预算”。普通账号不显示，`POST /api/chat/context/reset` 也必须由服务端验证 admin，目标固定为登录账号自身，不接受其他 UID/scope。
 
 清空操作为当前账号创建新的有效时间线，停止并等待已有执行退出；之后的请求仅包含角色、当前输入、工具声明及按规则触发的一次性注入，不再携带旧对话。旧 Run 与 Console 请求快照保留供审计，重置不会重放工具、删除账号或修改角色与模型配置。此功能是开发调试的“从头开始”，不是任意历史轮次回退或已实现的记忆恢复。
