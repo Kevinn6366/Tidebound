@@ -7,12 +7,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from src.tidebound.context.budget import context_usage
+from src.tidebound.runtime.emotion_enhancement import EmotionEnhancementView
 from src.tidebound.runtime.types import ContextUsage
 from webapp.auth.dependencies import current_user, require_owner
 from webapp.chat_service import (
     ChatMessageInput,
     ContextBudgetInput,
     DisplayStartInput,
+    EmotionEnhancementInput,
     RunView,
     SessionView,
     run_view,
@@ -197,6 +199,49 @@ async def compact_chat_context(request: Request) -> ContextUsage:
     user = current_user(request)
     require_owner(request, user.uid, admin=True)
     return await request.app.state.chat.compact_context(user.scope)
+
+
+@router.get("/api/chat/emotion-enhancement")
+async def get_emotion_enhancement(request: Request) -> EmotionEnhancementView:
+    """读取当前开发管理员自己的云端情感增强选择。
+
+    Args:
+        request: 携带已验证账号和运行时服务的请求。
+
+    Returns:
+        账号开关、服务端配置齐备状态和模型名称，不包含凭据。
+
+    Raises:
+        HTTPException: 未登录或当前账号不是管理员。
+        AgentError: 当前服务不是开发模式。
+        OSError: 账号设置读取失败。
+    """
+    user = current_user(request)
+    require_owner(request, user.uid, admin=True)
+    return request.app.state.chat.emotion.view(user.scope)
+
+
+@router.put("/api/chat/emotion-enhancement")
+async def update_emotion_enhancement(
+    selection: EmotionEnhancementInput, request: Request,
+) -> EmotionEnhancementView:
+    """保存当前开发管理员自己的云端情感增强开关。
+
+    Args:
+        selection: 严格校验的布尔开关，不接受其他账号信息或模型配置。
+        request: 携带已验证账号和运行时服务的请求。
+
+    Returns:
+        持久化后的账号选择与配置状态，从下一轮执行生效。
+
+    Raises:
+        HTTPException: 未登录或当前账号不是管理员。
+        AgentError: 非开发环境或启用时服务端模型尚未配置。
+        OSError: 保存失败，不能宣称选择已生效。
+    """
+    user = current_user(request)
+    require_owner(request, user.uid, admin=True)
+    return request.app.state.chat.emotion.select(user.scope, selection.enabled)
 
 
 @router.post("/api/chat/meet")

@@ -12,6 +12,11 @@ export interface ContextUsage {
   output_reserved: number;
   format_margin: number;
 }
+export interface EmotionEnhancementSettings {
+  enabled: boolean;
+  configured: boolean;
+  model: string;
+}
 
 export interface RunView {
   kind: 'chat' | 'meet';
@@ -273,6 +278,44 @@ export async function saveContextBudget(contextLimit: number): Promise<ContextUs
   }));
   if (!budget) throw new Error('缺少预算配置');
   return budget;
+}
+
+/**
+ * 校验情感增强开关与云端可用状态，不接收模型凭据或提示词。
+ * @param data - 服务端返回的未知配置对象。
+ * @returns 仅含开关、配置状态和模型标识的已校验配置。
+ * @throws 配置字段缺失或类型非法。
+ */
+function parseEmotionEnhancement(data: unknown): EmotionEnhancementSettings {
+  if (typeof data !== 'object' || data === null
+    || !('enabled' in data) || typeof data.enabled !== 'boolean'
+    || !('configured' in data) || typeof data.configured !== 'boolean'
+    || !('model' in data) || typeof data.model !== 'string') {
+    throw new Error('情感增强配置格式非法');
+  }
+  return { enabled: data.enabled, configured: data.configured, model: data.model };
+}
+
+/**
+ * 读取当前管理员账号的云端情感增强配置。
+ * @returns 已校验的开关与服务端配置状态。
+ * @throws 网络、权限或响应结构错误。
+ */
+export async function loadEmotionEnhancement(): Promise<EmotionEnhancementSettings> {
+  return parseEmotionEnhancement(await request('/api/chat/emotion-enhancement'));
+}
+
+/**
+ * 保存当前管理员账号的情感增强开关，由下一轮对话使用。
+ * @param enabled - 是否让回复在显示前经过云端角色模型润色。
+ * @returns 服务端确认保存的配置。
+ * @throws 网络、权限、云端未配置或保存失败。
+ */
+export async function saveEmotionEnhancement(enabled: boolean): Promise<EmotionEnhancementSettings> {
+  return parseEmotionEnhancement(await request('/api/chat/emotion-enhancement', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  }));
 }
 
 

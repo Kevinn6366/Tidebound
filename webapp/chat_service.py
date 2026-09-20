@@ -24,6 +24,13 @@ class ContextBudgetInput(BaseModel):
     context_limit: int = Field(ge=2048, strict=True)
 
 
+class EmotionEnhancementInput(BaseModel):
+    """管理员自身的情感增强开关，不接受账号、模型或凭据配置。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    enabled: bool
+
+
 class ChatAttachment(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: str
