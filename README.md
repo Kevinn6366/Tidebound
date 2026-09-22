@@ -114,6 +114,24 @@ npm --prefix webfrontend run dev
 
 Vite 开发入口为 `http://127.0.0.1:5173/app/`，API 代理到 `5201`。模型凭据与运行数据留在服务端，不进入前端构建或版本控制。当前不要启用多个 Uvicorn worker；完整生产部署还在后续规划中。
 
+### 启动脚本（Windows / Linux / macOS）
+
+首次使用先安装上述开发工具，将 `.env.example` 复制为 `.env` 并填写配置，再启动 Docker Desktop / Docker Engine。之后可在根目录使用脚本代替手动启动：
+
+```powershell
+# Windows（PowerShell；也可直接双击 start.bat）
+.\start.bat
+```
+
+```bash
+# Linux / macOS
+./start.sh
+```
+
+脚本安装锁定依赖、等待 MySQL 就绪，并启动后端和 Vite 前端；访问 [http://127.0.0.1:5173/app/](http://127.0.0.1:5173/app/)。已有 MySQL 时使用 `start.bat --skip-db` 或 `./start.sh --skip-db`，连接参数仍读取 `.env`。启动前需释放 `5201` 和 `5173` 端口。
+
+Linux/macOS 在当前终端按 `Ctrl+C` 停止前后端；Windows 在两个服务窗口分别按 `Ctrl+C`。数据库容器保持运行，后端日志写入 `data/agent-debug.log`。脚本使用 Vite 开发页面；需要通过后端 `5201/app/` 访问时，仍需按上文构建前端。
+
 ## 架构
 
 Tidebound 采用 Python 与 React 组成的模块化单体。Agent 执行循环由项目直接实现，业务内核与界面、HTTP 协议分别组织。
