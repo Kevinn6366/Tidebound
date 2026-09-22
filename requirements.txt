@@ -1,0 +1,20 @@
+# 开发环境：Python >=3.11、uv、Node.js >=22.12、npm、Git。
+# 数据库：MySQL 8.4；使用仓库容器时需要已启动的 Docker + Compose。
+# 前端：React 19、TypeScript 5.9、Vite 8、Tailwind CSS 4。
+# 前端依赖安装：npm --prefix webfrontend ci（版本由 package-lock.json 锁定）。
+# 聊天需要 Chat Completions 兼容模型服务及凭据；配置见 .env.example。
+# Python 锁定安装：uv sync --locked；也可 pip install -r requirements.txt。
+# 下列 Python 依赖范围与 pyproject.toml 保持一致。
+
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+python-multipart>=0.0.20,<1
+httpx>=0.27,<1
+PyYAML>=6,<7
+python-dotenv>=1,<2
+tzdata>=2025
+pymysql[rsa]>=1.1,<2
+
+# 开发测试
+pytest>=8,<10
+ruff>=0.11,<1
