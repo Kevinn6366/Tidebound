@@ -13,6 +13,7 @@ export default function AuthPage({ setup, passwordlessDebug = false }: { setup: 
   const [mode, setMode] = useState<'login' | 'register' | 'setup'>(setup ? 'setup' : 'login');
   const [username, setUsername] = useState(setup ? 'Admin' : '');
   const [password, setPassword] = useState('');
+  const [setupToken, setSetupToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [debugEnabled, setDebugEnabled] = useState(passwordlessDebug);
@@ -49,7 +50,7 @@ export default function AuthPage({ setup, passwordlessDebug = false }: { setup: 
       const enabled = mode === 'login' && await debugLoginSetting('');
       if (mode === 'login') setDebugEnabled(enabled);
       if (mode === 'login' && !enabled && !password) throw new Error('免密码调试已关闭，请输入密码。');
-      const user = await authenticate(enabled ? 'debug-login' : mode, username.trim(), password);
+      const user = await authenticate(enabled ? 'debug-login' : mode, username.trim(), password, setupToken.trim());
       window.location.assign(`/app/${user.uid}`);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '登录失败');
@@ -66,6 +67,8 @@ export default function AuthPage({ setup, passwordlessDebug = false }: { setup: 
     {!debugLogin && <label>密码<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
       minLength={8} maxLength={256} required placeholder="至少 8 个字符"
       value={password} onChange={event => setPassword(event.target.value)} /></label>}
+    {mode === 'setup' && <label>部署初始化口令<input type="password" autoComplete="off"
+      value={setupToken} onChange={event => setSetupToken(event.target.value)} placeholder="服务器 deploy.sh 输出的口令；本地开发可留空" /></label>}
     {error && <p role="alert" className="account-error">{error}</p>}
     <button type="submit" disabled={busy}>{busy ? '请稍候…' : title}</button>
     {!setup && <button type="button" className="account-secondary" disabled={busy}

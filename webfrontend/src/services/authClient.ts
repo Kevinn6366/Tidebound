@@ -53,10 +53,10 @@ function parseUser(data: unknown): AuthUser {
  * @returns 尚待校验的响应数据。
  * @throws HTTP 或网络错误。
  */
-async function authRequest(path: string, body?: object): Promise<unknown> {
+async function authRequest(path: string, body?: object, setupToken?: string): Promise<unknown> {
   const response = await fetch(`/api/auth/${path}`, {
     credentials: 'same-origin', method: body ? 'POST' : 'GET',
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: body ? { 'Content-Type': 'application/json', ...(setupToken ? { 'X-Tidebound-Setup-Token': setupToken } : {}) } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
   const data: unknown = await response.json();
@@ -98,11 +98,12 @@ export async function loadIdentity(): Promise<{ setup: boolean; passwordlessDebu
  * @param mode - 后端固定的账号操作。
  * @param username - 用户填写的账号名称。
  * @param password - 原始密码，仅通过请求提交。
+ * @param setupToken - 服务器部署脚本生成的首次管理员初始化口令；其他模式省略。
  * @returns 已建立 Cookie 会话的账号。
  * @throws 后端拒绝或网络错误。
  */
-export async function authenticate(mode: 'login' | 'register' | 'setup' | 'debug-login', username: string, password: string): Promise<AuthUser> {
-  const user = parseUser(await authRequest(mode, mode === 'debug-login' ? { username } : { username, password }));
+export async function authenticate(mode: 'login' | 'register' | 'setup' | 'debug-login', username: string, password: string, setupToken = ''): Promise<AuthUser> {
+  const user = parseUser(await authRequest(mode, mode === 'debug-login' ? { username } : { username, password }, mode === 'setup' ? setupToken : undefined));
   sessionStorage.setItem(USER_KEY, JSON.stringify(user));
   return user;
 }

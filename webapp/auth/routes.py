@@ -1,5 +1,7 @@
 """登录、注册、初始化及 Cookie 会话接口。"""
 
+import hmac
+import os
 from ipaddress import ip_address
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -46,7 +48,7 @@ def auth_status(request: Request) -> dict[str, bool]:
 
 @router.post("/setup", response_model=User, status_code=201)
 def setup_admin(credentials: Credentials, request: Request, response: Response) -> User:
-    """仅允许从本机完成一次管理员初始化。
+    """允许本机或持有部署初始化口令的请求创建首个管理员。
 
     Args:
         credentials: 首个管理员的用户名与密码。
@@ -57,7 +59,7 @@ def setup_admin(credentials: Credentials, request: Request, response: Response) 
         uid-00000001 管理员身份。
 
     Raises:
-        HTTPException: 非本机访问返回 403。
+        HTTPException: 非本机且口令不匹配时返回 403。
         AgentError: 已初始化时返回 409。
     """
     host = request.client.host if request.client else ""
@@ -65,8 +67,10 @@ def setup_admin(credentials: Credentials, request: Request, response: Response) 
         local = ip_address(host).is_loopback
     except ValueError:
         local = host == "testclient"
-    if not local:
-        raise HTTPException(403, "首次管理员初始化仅允许本机访问")
+    expected = os.environ.get('TIDEBOUND_SETUP_TOKEN', '')
+    supplied = request.headers.get('X-Tidebound-Setup-Token', '')
+    if not local and not (expected and hmac.compare_digest(supplied, expected)):
+        raise HTTPException(403, "首次管理员初始化需要部署口令")
     return set_session(request, response, request.app.state.auth.create_user(credentials, setup=True))
 
 

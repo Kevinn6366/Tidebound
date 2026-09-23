@@ -21,6 +21,12 @@ for key in TIDEBOUND_MYSQL_PASSWORD TIDEBOUND_MYSQL_ROOT_PASSWORD; do
     fi
 done
 
+setup_token=$(awk -F= '$1 == "TIDEBOUND_SETUP_TOKEN" { value=$2 } END { print value }' .env)
+if [[ -z "$setup_token" ]]; then
+    setup_token=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
+    printf '\nTIDEBOUND_SETUP_TOKEN=%s\n' "$setup_token" >> .env
+fi
+
 public_port=$(awk -F= '$1 == "TIDEBOUND_PUBLIC_PORT" { print $2; exit }' .env)
 public_port=${public_port:-8080}
 if [[ ! "$public_port" =~ ^[0-9]+$ ]] || (( public_port < 1 || public_port > 65535 )); then
@@ -41,6 +47,7 @@ for attempt in {1..30}; do
         public_host=${TIDEBOUND_PUBLIC_HOST:-$(hostname -I 2>/dev/null | awk '{print $1}' || true)}
         public_host=${public_host:-服务器IP}
         echo "部署完成：http://${public_host}:${public_port}/app/"
+        echo "首次管理员初始化口令：${setup_token}（也保存在服务器 .env 的 TIDEBOUND_SETUP_TOKEN）"
         exit 0
     fi
     sleep 2

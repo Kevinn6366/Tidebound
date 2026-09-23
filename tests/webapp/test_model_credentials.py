@@ -15,6 +15,7 @@ from src.tidebound.runtime.session import ChatSession
 from src.tidebound.runtime.types import Message, ModelReply
 from src.tidebound.storage.model_credentials import ModelCredentialInput
 from tests.support.account_store import FileUserStore
+from tests.webapp.test_auth_console import CREDENTIALS, make_app
 from webapp.config import WebSettings
 from webapp.main import create_app
 
@@ -85,3 +86,23 @@ def test_prod_chat_runs_with_own_key(tmp_path: Path) -> None:
         await service.close()
 
     asyncio.run(scenario())
+
+
+def test_remote_first_admin_requires_deploy_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Docker 映射端口的远程初始化必须携带服务器生成的口令。
+
+    Args:
+        tmp_path: 尚无账号的隔离存储目录。
+        monkeypatch: 仅在测试进程中设置部署口令。
+    """
+    monkeypatch.setenv('TIDEBOUND_SETUP_TOKEN', 'release-setup-token')
+    remote = TestClient(make_app(tmp_path), client=('198.51.100.8', 12345))
+    assert remote.post('/api/auth/setup', json=CREDENTIALS).status_code == 403
+    assert remote.post('/api/auth/setup', json=CREDENTIALS,
+                       headers={'X-Tidebound-Setup-Token': 'wrong'}).status_code == 403
+    response = remote.post('/api/auth/setup', json=CREDENTIALS,
+                           headers={'X-Tidebound-Setup-Token': 'release-setup-token'})
+    assert response.status_code == 201
+    assert response.json()['role'] == 'admin'
+    assert remote.post('/api/auth/setup', json=CREDENTIALS,
+                       headers={'X-Tidebound-Setup-Token': 'release-setup-token'}).status_code == 409
