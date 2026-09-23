@@ -3,7 +3,7 @@ import asyncio
 import json
 from typing import TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.tidebound.config import AgentSettings
 from src.tidebound.context.budget import select_messages
@@ -88,11 +88,21 @@ async def generate(purpose: str, payload: dict[str, object], schema: type[Result
         step_token = request_step.set(request_step.get() + 1)
         preview_token = preview_sink.set(None)
         try:
-            reply = await model.complete(system, messages, [])
-            check_stop(stop)
-            if reply.finish_reason != 'stop' or reply.message.role != 'assistant' or reply.message.tool_calls:
-                raise ValueError('搜索整理节点未正常结束')
-            return schema.model_validate_json(reply.message.content)
+            for attempt in range(2):
+                reply = await model.complete(system, messages, [])
+                check_stop(stop)
+                if reply.finish_reason != 'stop' or reply.message.role != 'assistant' or reply.message.tool_calls:
+                    raise ValueError('搜索整理节点未正常结束')
+                try:
+                    return schema.model_validate_json(reply.message.content)
+                except ValidationError:
+                    if attempt:
+                        raise
+                    # 不截断模型事实；提供程序的准确结构约束后仅重试一次。
+                    messages = node_messages(system, {**payload, 'required_output_schema': schema.model_json_schema(),
+                        'validation_feedback': '上次输出未通过JSON或长度校验。严格遵守字段类型和maxLength，仅输出合法JSON。'}, settings)
+                    request_step.set(request_step.get() + 1)
+            raise ValueError('搜索整理节点未产生有效结果')
         finally:
             request_purpose.reset(purpose_token)
             request_step.reset(step_token)

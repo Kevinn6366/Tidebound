@@ -2151,6 +2151,10 @@ export default function AppCore({ router }) {
   }, [settings.vnLinesPerPage]);
 
   const pages = latestMessage ? getPages(latestMessage.content) : [""];
+  const animatedReplyId = useRef(null);
+  useEffect(() => {
+    if (latestMessage?.isStreaming) animatedReplyId.current = latestMessage.id;
+  }, [latestMessage?.id, latestMessage?.isStreaming]);
   // 两段流使用不同展示身份，续答从第一页重新逐字呈现。
   useEffect(() => { setVnPage(0); }, [latestMessage?.id]);
   const currentDisplay = pages[vnPage] || pages[pages.length - 1] || "";
@@ -2179,12 +2183,13 @@ export default function AppCore({ router }) {
 
   useEffect(() => { if (vnTextContainerRef.current) vnTextContainerRef.current.scrollTop = vnTextContainerRef.current.scrollHeight; }, [streamedDisplay]);
 
-  // ✨ 核心修复：在打字机流式输出时，强制翻页跟随，解决长文本被截断显示不全的问题
+  // 当前页打完并留出阅读时间后才翻下一页；网络提前收完不能跳过展示队列。
   useEffect(() => {
-    if (settings.vnAutoPage && latestMessage?.isStreaming && pages.length > 0) {
-        setVnPage(Math.max(0, pages.length - 1));
-    }
-  }, [pages.length, latestMessage?.isStreaming, settings.vnAutoPage]);
+    if (!settings.vnAutoPage || latestMessage?.id !== animatedReplyId.current
+        || !hasNextPage || !currentDisplay || streamedDisplay !== currentDisplay) return;
+    const timer = window.setTimeout(() => setVnPage(page => page + 1), 800);
+    return () => window.clearTimeout(timer);
+  }, [latestMessage?.id, settings.vnAutoPage, hasNextPage, currentDisplay, streamedDisplay, vnPage]);
   // ✨ --- 修复替换的 loadScripts 功能 ---
   // 修复 Could not find Cubism 4 runtime 报错 (支持离线引擎导入与热加载)
   const loadScripts = async () => {

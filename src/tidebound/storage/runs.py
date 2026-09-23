@@ -176,6 +176,7 @@ class RunStore:
             record.error_code = 'history_deleted'
             record.error = None
             self.save(owner, record)
-        directory = self.root / UUID(owner).hex / 'summaries'
-        if directory.exists():
-            shutil.rmtree(directory)
+        for name in ('summaries', 'rolling_summaries'):
+            directory = self.root / UUID(owner).hex / name
+            if directory.exists():
+                shutil.rmtree(directory)

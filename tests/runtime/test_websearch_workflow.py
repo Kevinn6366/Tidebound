@@ -341,3 +341,111 @@ def test_reaction_style_uses_only_valid_committed_history() -> None:
         assert fresh.inputs[0][1]['style'] == 'consider'
         assert fresh.inputs[0][1]['recent_reactions'] == []
     asyncio.run(scenario())
+
+
+def test_reaction_keeps_run_character_and_finishes_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """首段沿用固定人格，首字后使用独立完成窗口，内部整理不注入角色。
+
+    Args:
+        tmp_path: 隔离工作流事件目录。
+        monkeypatch: 缩短测试的首字与完成窗口。
+    """
+    from importlib import import_module
+
+    from src.tidebound.runtime.preview import publish_preview
+    node = import_module('src.tidebound.workflows.websearch.N00-FirstReaction')
+    monkeypatch.setattr(node, 'REACTION_TIMEOUT_SECONDS', .1)
+    monkeypatch.setattr(node, 'REACTION_COMPLETION_SECONDS', .3)
+    previews: list[str] = []
+
+    class CharacterModel(SearchModel):
+        async def complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:
+            """模拟首字后较慢完成的 Flash 输出。
+
+            Args:
+                system: 角色快照及当前节点规则。
+                messages: 节点资料。
+                tools: 当前允许的工具。
+
+            Returns:
+                完整首段或内部整理结果。
+            """
+            if request_purpose.get() == 'tools.websearch.reaction':
+                assert system.startswith('RUN_CHARACTER_SNAPSHOT\n\n')
+                publish_preview('唔，')
+                await asyncio.sleep(.15)
+                publish_preview('唔，这个有意思。')
+                return ModelReply(message=Message(role='assistant', content='唔，这个有意思。'), finish_reason='stop')
+            assert 'RUN_CHARACTER_SNAPSHOT' not in system
+            return await super().complete(system, messages, tools)
+
+    async def scenario() -> None:
+        current = record('说说最近的更新', status='running')
+        token = preview_sink.set(previews.append)
+        try:
+            await search_workflow('更新', [], current, retrieve, CharacterModel(),
+                                  AgentSettings(data_dir=tmp_path), asyncio.Event(),
+                                  character_system='RUN_CHARACTER_SNAPSHOT')
+        finally:
+            preview_sink.reset(token)
+        assert current.first_reaction == '唔，这个有意思。'
+        assert previews[0] == '唔，' and previews[-1] == current.first_reaction
+        assert '' not in previews
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('ending', ['stop', 'length', 'timeout', 'transport'])
+def test_long_reaction_is_not_a_stream_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str) -> None:
+    """跨越80字符仍连续展示；真正截断、超时或断流不能提交半句。"""
+    from importlib import import_module
+
+    from src.tidebound.runtime.preview import publish_preview
+    node = import_module('src.tidebound.workflows.websearch.N00-FirstReaction')
+    monkeypatch.setattr(node, 'REACTION_COMPLETION_SECONDS', .01)
+    text = '这次我们就从你关心的那一点慢慢想起，' * 5 + '不用着急。'
+    previews: list[str] = []
+
+    class LongReactionModel(SearchModel):
+        async def complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:
+            """模拟跨越旧长度阈值后，不同的供应商终止结果。
+
+            Args:
+                system: 节点系统规则。
+                messages: 节点输入材料。
+                tools: 本节点没有工具。
+
+            Returns:
+                正常或被截断的首段。
+
+            Raises:
+                OSError: 模拟连接中断。
+            """
+            if request_purpose.get() == 'tools.websearch.reaction':
+                for size in (20, 79, 81, len(text)):
+                    publish_preview(text[:size])
+                if ending == 'timeout':
+                    await asyncio.Event().wait()
+                if ending == 'transport':
+                    raise OSError('fixture disconnected')
+                return ModelReply(message=Message(role='assistant', content=text), finish_reason=ending)
+            return await super().complete(system, messages, tools)
+
+    async def scenario() -> None:
+        current = record('输入', status='running')
+        token = preview_sink.set(previews.append)
+        try:
+            result = await search_workflow('教程', [], current, retrieve, LongReactionModel(),
+                                           AgentSettings(data_dir=tmp_path), asyncio.Event())
+        finally:
+            preview_sink.reset(token)
+        assert previews[:4] == [text[:size] for size in (20, 79, 81, len(text))]
+        if ending == 'stop':
+            assert current.first_reaction == text
+            assert result['spoken_reaction'] == text
+            assert '' not in previews
+        else:
+            assert current.first_reaction == ''
+            assert previews[-1] == ''
+            assert 'spoken_reaction' not in result
+    asyncio.run(scenario())

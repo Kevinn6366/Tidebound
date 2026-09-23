@@ -47,7 +47,7 @@ test('首版拒绝附件，失败保留草稿和附件', async ({ page }) => {
 test('开发模式仍可访问原完整设置', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('http://127.0.0.1:5174/app/');
+  await page.goto(`http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? 5174}/app/`);
   await page.getByRole('button', { name: 'SYSTEM', exact: true }).click();
   await expect(page.getByRole('button', { name: '文本互动', exact: true })).toBeVisible();
   expect(errors).toEqual([]);
@@ -174,7 +174,7 @@ test('管理员登录后在专属 console 持续读取日志', async ({ page }) 
   await expect(page.getByLabel('运行日志', { exact: true })).toHaveCount(0);
   await page.getByRole('link', { name: '查看完整 LLM 对话上下文' }).click();
   await page.getByRole('button', { name: new RegExp(`现在时间是什么.*Run ${runId.slice(0, 8)}`) }).click();
-  await expect(page.getByRole('navigation', { name: '本轮模型请求' }).getByRole('button')).toHaveCount(2);
+  await expect(page.getByRole('navigation', { name: '本轮模型请求' }).getByRole('button', { name: /^主回复/ })).toHaveCount(2);
   await page.getByRole('button', { name: '主回复 · 第 1 次请求', exact: true }).click();
   await expect(page.getByLabel('本次请求注入')).toHaveCount(0);
   await page.getByText('原始请求 JSON（完整）', { exact: true }).click();
@@ -275,7 +275,7 @@ test('管理员清空上下文后恢复初始状态且新请求不带旧历史',
   await expect(page.getByRole('complementary', { name: 'Dev 工具箱' })).toBeVisible();
   await page.screenshot({ path: 'test-results/dev-toolbox.png' });
   await page.getByRole('complementary', { name: 'Dev 工具箱' }).getByRole('button', { name: '清空上下文', exact: true }).click();
-  await expect(page.getByText('上下文已清空，可以开始新的调试对话。', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await (await page.request.get('/api/chat/session')).json()).messages).toEqual([]);
   expect((await (await page.request.get('/api/chat/session')).json()).messages).toEqual([]);
   await expect(page.getByLabel('角色回复', { exact: true })).toHaveCount(0);
   await expect(page.locator('.context-budget > summary')).toHaveAttribute('aria-label', '上下文预算：尚无请求用量');

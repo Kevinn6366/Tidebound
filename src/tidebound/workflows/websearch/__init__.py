@@ -17,7 +17,8 @@ reading_impression = import_module('.N03-ReadingImpression', __name__).reading_i
 
 async def search_workflow(query: str, history: list[RunRecord], record: RunRecord,
                           retrieve: Callable[[], Awaitable[dict[str, object]]], model: ModelClient,
-                          settings: AgentSettings, stop: asyncio.Event) -> dict[str, object]:
+                          settings: AgentSettings, stop: asyncio.Event, *,
+                          character_system: str | None = None) -> dict[str, object]:
     """顺序执行搜索节点，任何失败都不向主模型回退原始搜索材料。
 
     Args:
@@ -28,6 +29,7 @@ async def search_workflow(query: str, history: list[RunRecord], record: RunRecor
         model: 本轮固定的独立搜索模型。
         settings: 本轮配置。
         stop: 执行撤销信号。
+        character_system: 本轮固定角色规则，传给可见首段，内部整理节点不使用。
 
     Returns:
         整理后的印象或供应商安全错误，以及已完成的第一反应。
@@ -43,7 +45,8 @@ async def search_workflow(query: str, history: list[RunRecord], record: RunRecor
             record.reaction_streaming = True
             try:
                 reaction = await first_reaction(record.user_content, query, model, settings, stop,
-                                                history=history, timeline_id=record.timeline_id)
+                                                history=history, timeline_id=record.timeline_id,
+                                                character_system=character_system)
                 if reaction is not None:
                     record.first_reaction = reaction
                 else:

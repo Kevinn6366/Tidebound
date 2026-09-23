@@ -10,6 +10,32 @@ test.beforeEach(async ({ page }) => {
   expect(response.status()).toBe(201);
 });
 
+test('身份校验完成前不请求问候，校验成功后在标题页生成', async ({ page }) => {
+  const identity = await (await page.request.get('/api/auth/me')).json();
+  let releaseIdentity: () => void = () => {};
+  const identityGate = new Promise<void>(resolve => { releaseIdentity = resolve; });
+  let meetRequests = 0;
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/chat/meet') meetRequests++;
+  });
+  await page.route('**/api/auth/me', async route => {
+    await identityGate;
+    await route.continue();
+  });
+  try {
+    await page.goto(`/app/${identity.uid}`);
+    await expect(page.getByText('正在读取登录状态…', { exact: true })).toBeVisible();
+    await page.waitForTimeout(1700);
+    expect(meetRequests).toBe(0);
+    expect((await (await page.request.get('/api/chat/session')).json()).meet_run).toBeNull();
+  } finally {
+    releaseIdentity();
+  }
+  await expect(page.getByRole('button', { name: 'START', exact: true })).toBeVisible();
+  await expect.poll(() => meetRequests).toBeGreaterThan(0);
+  await expect.poll(async () => (await (await page.request.get('/api/chat/session')).json()).meet_run?.status).toBe('completed');
+});
+
 test('欢迎已后台完成，进入后逐字显示且刷新不重复生成', async ({ page }) => {
   await page.goto('/app/');
   await expect(page.getByRole('button', { name: 'START', exact: true })).toBeVisible();

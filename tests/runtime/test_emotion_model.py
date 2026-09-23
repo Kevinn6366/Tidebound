@@ -52,7 +52,7 @@ def test_instruct_request_contains_only_system_and_draft(tmp_path: Path, monkeyp
         def handle(request: httpx.Request) -> httpx.Response:
             captured.append(request)
             return httpx.Response(200, json={"choices": [{"message": {
-                "role": "assistant", "content": "明天 8:30 见呀。"}, "finish_reason": "stop"}]})
+                "role": "assistant", "content": "明天 8:30 见。"}, "finish_reason": "stop"}]})
 
         actual_client = httpx.AsyncClient
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: actual_client(
@@ -75,7 +75,7 @@ def test_instruct_request_contains_only_system_and_draft(tmp_path: Path, monkeyp
             request_injection.reset(injection)
             request_run.reset(run)
             preview_sink.reset(preview)
-        assert result.message.content == "明天 8:30 见呀。"
+        assert result.message.content == "明天 8:30 见。"
         assert result.message.reasoning_content == "internal-reasoning"
         assert not previews
         assert len(captured) == 1
@@ -87,7 +87,7 @@ def test_instruct_request_contains_only_system_and_draft(tmp_path: Path, monkeyp
         assert "tools" not in body and "reasoning_effort" not in body
         assert body["messages"] == [
             {"role": "system", "content": enhancement.system},
-            {"role": "user", "content": enhancement.instruction + "\n\n明天 8:30 见。"},
+            {"role": "user", "content": enhancement.instruction + "\n\n" + json.dumps({"draft": "明天 8:30 见。"}, ensure_ascii=False)},
         ]
         assert "你是亚托莉" in enhancement.system and "水菜萌" in enhancement.system
         saved = ModelRequestStore(tmp_path).list_requests()
@@ -173,5 +173,49 @@ def test_polish_timeout_cancels_request_and_restores_context() -> None:
         assert error.value.code == "emotion_timeout"
         assert cancelled.is_set()
         assert request_purpose.get() == "chat" and preview_sink.get() is None
+
+    asyncio.run(scenario())
+
+
+def test_provider_reflected_canary_never_reaches_error_or_snapshot(tmp_path: Path,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """用合成鉴权 canary 检查第三方错误反射不污染快照及对外错误。
+
+    Args:
+        tmp_path: 隔离快照与事件目录。
+        monkeypatch: 替换云端传输为反射凭据的错误服务。
+    """
+    async def scenario() -> None:
+        canary = 'SYNTHETIC_AUTH_CANARY_14'
+        settings = AgentSettings(data_dir=tmp_path, emotion_base_url='https://emotion.test/v1',
+                                 emotion_model='instruct', emotion_api_key=canary)
+        calls = 0
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            assert request.headers['Authorization'] == 'Bearer ' + canary
+            assert canary not in request.content.decode()
+            return httpx.Response(401, json={'error': {'code': canary, 'message': canary}})
+
+        actual_client = httpx.AsyncClient
+        monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: actual_client(
+            transport=httpx.MockTransport(respond), **kwargs))
+        service = EmotionEnhancement(settings)
+        owner = uuid4().hex
+        service.select(owner, True)
+        enhancement = service.prepare(owner)
+        assert enhancement is not None
+        context = request_run.set((owner, str(uuid4())))
+        try:
+            with pytest.raises(AgentError) as failure:
+                await enhancement.polish('你好。')
+        finally:
+            request_run.reset(context)
+        assert failure.value.code == 'emotion_model_error'
+        assert canary not in str(failure.value) and failure.value.__suppress_context__
+        assert calls == 1
+        for path in tmp_path.rglob('*.json*'):
+            assert canary not in path.read_text()
 
     asyncio.run(scenario())

@@ -47,6 +47,19 @@ Tidebound 是一个以持续关系为核心的角色陪伴项目。角色有自�
 
 ## 快速开始
 
+### Linux 服务器 ZIP 部署
+
+将发布 ZIP 解压到服务器，安装 Docker Engine、Compose 插件和 curl，开放所选的 HTTP 端口，然后在解压目录运行：
+
+```bash
+chmod +x deploy.sh
+./deploy.sh
+```
+
+首次运行会生成 `.env` 并提示填写模型 API Key 和两个 MySQL 密码。填好后再次运行 `./deploy.sh`，脚本构建前端与后端镜像、启动 MySQL 和 WebApp、验证 HTTP 健康接口与页面，并输出访问地址。默认地址为 `http://服务器IP:8080/app/`；可在 `.env` 设置 `TIDEBOUND_PUBLIC_PORT`，或运行前设置 `TIDEBOUND_PUBLIC_HOST` 用于打印指定域名。首次访问页面需要创建管理员账号。数据库和运行数据保存在 Docker 命名卷中，重复运行脚本不会清空。
+
+ZIP 不包含 `.env`、本地数据或模型凭据。公网正式使用应在服务器前配置 HTTPS 反向代理与防火墙，只开放需要的端口；直接 HTTP 地址用于初次连通验证。
+
 以下是当前单机、单 worker 的开发运行方式。需要 **Python 3.11+、uv、Node.js 22.12+、npm，以及 Docker Compose**（用于启动 MySQL；也可使用已有 MySQL）。
 
 ### 1. 获取项目并安装依赖

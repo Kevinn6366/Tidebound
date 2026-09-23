@@ -5,23 +5,24 @@ import asyncio
 from src.tidebound.config import AgentSettings
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ModelClient
-from src.tidebound.prompting import load_prompt_bundles
+from src.tidebound.prompting import load_chat_system, load_prompt_bundles
 from src.tidebound.runtime.events import emit_event, trace_operation
 from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.types import RunRecord
 from src.tidebound.storage.model_requests import request_purpose, request_step
 from src.tidebound.workflows.websearch.nodes import check_stop, node_messages
 
-REACTION_TIMEOUT_SECONDS = 5
-REACTION_COMPLETION_SECONDS = 15
-MAX_REACTION_LENGTH = 80
+REACTION_TIMEOUT_SECONDS = 15
+REACTION_COMPLETION_SECONDS = 30
+REACTION_TARGET_LENGTH = 80
 REACTION_STYLES = ('consider', 'confident', 'focus', 'playful', 'warm', 'concise')
 
 
 async def first_reaction(question: str, query: str, model: ModelClient,
                          settings: AgentSettings, stop: asyncio.Event, *,
                          history: list[RunRecord] | None = None,
-                         timeline_id: str | None = None) -> str | None:
+                         timeline_id: str | None = None,
+                         character_system: str | None = None) -> str | None:
     """理解当前问题并独立流式生成第一反应，仅正文片段进入展示。
 
     Args:
@@ -32,6 +33,7 @@ async def first_reaction(question: str, query: str, model: ModelClient,
         stop: 本轮撤销信号。
         history: 当前账号历史，仅取同时间线已提交的首段作避重复参考。
         timeline_id: 本轮有效时间线，排除清空或回退前的内容。
+        character_system: Run 开始时固定的完整角色规则；独立调用时加载当前角色包。
 
     Returns:
         正常完成的第一反应；超时或生成错误时返回 None。
@@ -51,13 +53,12 @@ async def first_reaction(question: str, query: str, model: ModelClient,
     first_chunk = True
 
     def stream_reaction(content: str) -> None:
-        """转发有界的累计正文，不转发思考或 JSON。
+        """转发累计正文，不把表达长度偏差当作流协议故障。
 
         Args:
             content: 供应商当前累计正文。
 
         Raises:
-            ValueError: 首段超长。
             AgentError: 本轮已停止。
         """
         nonlocal first_chunk
@@ -65,8 +66,6 @@ async def first_reaction(question: str, query: str, model: ModelClient,
         if content and first_chunk and deadline is not None:
             first_chunk = False
             deadline.reschedule(asyncio.get_running_loop().time() + REACTION_COMPLETION_SECONDS)
-        if len(content) > MAX_REACTION_LENGTH:
-            raise ValueError('第一反应过长')
         if sink is not None:
             sink(content)
 
@@ -77,8 +76,11 @@ async def first_reaction(question: str, query: str, model: ModelClient,
     try:
         with trace_operation(settings, 'workflow', purpose):
             async with asyncio.timeout(REACTION_TIMEOUT_SECONDS) as deadline:
-                system = load_prompt_bundles(settings.prompts_dir, (purpose,)).content
+                character = character_system if character_system is not None else load_chat_system(settings.prompts_dir).content
+                system = character + '\n\n' + load_prompt_bundles(settings.prompts_dir, (purpose,)).content
                 messages = node_messages(system, {
+                    'stage': 'before_retrieval',
+                    'task': '只接住用户的要求，用一句短话表示理解；尚无任何检索结果，禁止回答question中的事实问题。',
                     'question': question, 'topic': query, 'style': style,
                     'recent_reactions': reactions[-4:],
                 }, settings)
@@ -89,6 +91,10 @@ async def first_reaction(question: str, query: str, model: ModelClient,
                         or reply.message.tool_calls or not content):
                     raise ValueError('第一反应未正常结束')
                 stream_reaction(content)
+                # 已展示的有效正文不能因文风目标而作废；请求仍受输出预算和超时约束。
+                if len(content) > REACTION_TARGET_LENGTH:
+                    emit_event(settings, 'workflow', 'websearch.first_reaction_length', 'completed',
+                               error_code='reaction_target_exceeded')
                 return content
     except (TimeoutError, ValueError, OSError, AgentError) as error:
         check_stop(stop)

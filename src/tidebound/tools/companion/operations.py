@@ -6,6 +6,7 @@ from uuid import uuid4
 from src.tidebound.config import AgentSettings
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ModelClient
+from src.tidebound.memory.rolling_summary import ConversationMemory
 from src.tidebound.runtime.types import RunRecord
 from src.tidebound.storage.companion import CompanionState, Followup, Interest, SavedFact
 from src.tidebound.tools.companion.arguments import (
@@ -32,7 +33,8 @@ class CompanionTools:
 
     def __init__(self, history: list[RunRecord], record: RunRecord, state: CompanionState,
                  model: ModelClient, settings: AgentSettings, stop: asyncio.Event,
-                 websearch_model: ModelClient | None = None) -> None:
+                 websearch_model: ModelClient | None = None,
+                 character_system: str | None = None, memory: ConversationMemory | None = None) -> None:
         """绑定经过会话层鉴权的材料，不接受模型自行选择业务范围。
 
         Args:
@@ -43,7 +45,10 @@ class CompanionTools:
             settings: 本轮提示词与预算配置。
             stop: 执行撤销信号。
             websearch_model: 独立搜索整理模型，未指定时沿用传入的模型替身。
+            character_system: 主执行固定的角色规则，供搜索首段沿用。
+            memory: 当前账号的长期摘要读取服务，读取不触发生成。
         """
+        self.memory = memory
         self.history = [r for r in history if r.status == 'completed' and r.timeline_id == record.timeline_id]
         self.record = record
         self.state = state
@@ -51,6 +56,19 @@ class CompanionTools:
         self.websearch_model = websearch_model or model
         self.settings = settings
         self.stop = stop
+        self.character_system = character_system
+
+    def read_conversation_summary(self) -> dict[str, object]:
+        """读取当前执行可见的长期摘要，不等待或触发后台生成。
+
+        Returns:
+            摘要、覆盖时间和未覆盖轮数；没有版本时明确返回状态。
+
+        Raises:
+            OSError: 摘要文件不可读。
+            ValueError: 摘要版本损坏。
+        """
+        return self.memory.read() if self.memory else {'status': 'not_generated', 'summary': None}
 
     def evidence(self, source_run_id: str, quote: str) -> str:
         """确保事实来源是当前时间线上的用户原话。
@@ -156,7 +174,8 @@ class CompanionTools:
             if duplicate:
                 return {'followup': duplicate.model_dump(), 'commit': 'on_run_completion'}
         result = await summarize({'action': action, 'request': args.model_dump(),
-                                  'previous': existing.model_dump() if existing else None},
+                                  'previous': existing.model_dump() if existing else None,
+                                  'conversation_memory': self.memory.read(include_uncovered=True) if self.memory else None},
                                  self.model, self.settings, self.stop)
         status = 'cancelled' if action == 'cancel' else getattr(args, 'status', 'active')
         item = Followup(id=existing.id if existing else uuid4().hex, summary=result.summary,
@@ -209,7 +228,7 @@ class CompanionTools:
             return await search_web(args.query, key)
         return await search_workflow(args.query, self.history, self.record,
                                      partial(search_web, args.query, key),
-                                     self.websearch_model, self.settings, self.stop)
+                                     self.websearch_model, self.settings, self.stop, character_system=self.character_system)
 
     async def interest_updates(self, args: CheckInterestArguments) -> dict[str, object]:
         """通过同一阅读工作流检查兴趣，仅整理成功后暂存检查状态。
@@ -234,7 +253,7 @@ class CompanionTools:
             return await search_web(interest.topic, key)
         result = await search_workflow(interest.topic + ' 最新进展', self.history, self.record,
             partial(check_interest_updates, candidate, args.interest_id, key),
-            self.websearch_model, self.settings, self.stop)
+            self.websearch_model, self.settings, self.stop, character_system=self.character_system)
         if 'error' in result:
             return result
         self.state.interests = candidate.interests

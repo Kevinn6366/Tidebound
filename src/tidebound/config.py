@@ -34,6 +34,11 @@ class AgentSettings(BaseModel):
     emotion_timeout_seconds: float = Field(default=30, gt=0, le=120)
     emotion_max_output_tokens: int = Field(default=2048, ge=1)
     emotion_context_limit: int = Field(default=32768, ge=2048)
+    rolling_summary_model: str = ""
+    rolling_summary_context_limit: int = Field(default=65536, ge=2048)
+    rolling_summary_max_output_tokens: int = Field(default=4096, ge=1)
+    rolling_summary_max_bytes: int = Field(default=20000, ge=512, le=48000)
+    rolling_summary_delay_seconds: float = Field(default=2, ge=0, le=60)
     debug: bool = False
     reasoning_effort: Literal["low", "high", "max"] | None = None
     timezone: str = "Asia/Shanghai"
@@ -73,6 +78,11 @@ class AgentSettings(BaseModel):
             "emotion_timeout_seconds": "TIDEBOUND_EMOTION_TIMEOUT",
             "emotion_max_output_tokens": "TIDEBOUND_EMOTION_MAX_OUTPUT_TOKENS",
             "emotion_context_limit": "TIDEBOUND_EMOTION_CONTEXT_LIMIT",
+            "rolling_summary_model": "TIDEBOUND_ROLLING_SUMMARY_MODEL",
+            "rolling_summary_context_limit": "TIDEBOUND_ROLLING_SUMMARY_CONTEXT_LIMIT",
+            "rolling_summary_max_output_tokens": "TIDEBOUND_ROLLING_SUMMARY_MAX_OUTPUT_TOKENS",
+            "rolling_summary_max_bytes": "TIDEBOUND_ROLLING_SUMMARY_MAX_BYTES",
+            "rolling_summary_delay_seconds": "TIDEBOUND_ROLLING_SUMMARY_DELAY_SECONDS",
             "debug": "TIDEBOUND_DEBUG",
             "reasoning_effort": "TIDEBOUND_LLM_REASONING_EFFORT",
             "mode": "TIDEBOUND_MODE", "base_url": "TIDEBOUND_LLM_BASE_URL",

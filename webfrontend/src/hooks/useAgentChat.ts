@@ -46,7 +46,7 @@ export function useAgentChat(): {
     let cancelled = false;
     let initialized = false;
     const invalidate = (): void => { cancelled = true; requestSequence.current++; };
-    /** 每次挂载代表登录后的应用进入，只触发一次预生成，轮询不触发欢迎。 */
+    /** App 完成服务端身份校验后才挂载；登录页和校验中不会触发问候。 */
     async function initialize(): Promise<void> {
       const sequence = ++requestSequence.current;
       try {

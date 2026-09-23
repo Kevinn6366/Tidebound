@@ -250,6 +250,10 @@ def register_companion_tools(tools: ToolMap, service: 'CompanionTools', *, inter
         service: 运行时构造的有效历史、状态与工作流服务。
         internet_enabled: 用户发送本轮消息时明确开启的联网权限。
     """
+    tools['read_conversation_summary'] = {
+        'description': '读取长期对话摘要：共同经历、关系变化、话题与约定；含覆盖时间，细节可回看原文。',
+        'arguments': EmptyArguments, 'execute': lambda _: service.read_conversation_summary(),
+    }
     register_read_past_conversation(tools, service)
     register_remember_fact(tools, service)
     register_create_followup(tools, service)

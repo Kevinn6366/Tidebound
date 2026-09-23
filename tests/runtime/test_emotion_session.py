@@ -58,7 +58,7 @@ class PolishingModel:
     """只接受独立润色输入，可控制返回时间及模拟取消后的迟到结果。"""
 
     def __init__(self, replies: list[str] | None = None, *, blocked_call: int | None = None) -> None:
-        self.replies = replies or ['润色后的台词']
+        self.replies = replies or ['主模型原稿']
         self.inputs: list[list[Message]] = []
         self.blocked_call = blocked_call
         self.entered = asyncio.Event()
@@ -106,7 +106,7 @@ def test_emotion_commit_and_next_context_use_same_text(tmp_path: Path, enabled: 
             service.emotion.select(owner, True)
         first = service.start(owner, str(uuid4()), '你好')
         await asyncio.wait_for(service.active[owner].task, 2)
-        expected = '润色后的台词' if enabled else '主模型原稿'
+        expected = '主模型原稿'
         assert first.status == 'completed'
         assert first.messages[-1].content == expected
         assert session_view(service, owner).messages[-1].content == expected
@@ -143,7 +143,7 @@ def test_emotion_hides_raw_preview_and_freezes_setting_per_run(tmp_path: Path) -
         assert session_view(service, owner).messages == []
         polisher.release.set()
         await asyncio.wait_for(task, 2)
-        assert run.status == 'completed' and run.messages[-1].content == '润色后的台词'
+        assert run.status == 'completed' and run.messages[-1].content == '主模型原稿'
         for scope in (owner, other):
             raw_run = service.start(scope, str(uuid4()), '下一轮')
             await asyncio.wait_for(service.active[scope].task, 2)
@@ -156,16 +156,18 @@ def test_emotion_hides_raw_preview_and_freezes_setting_per_run(tmp_path: Path) -
 
 @pytest.mark.parametrize('action', ['stop', 'reset'])
 @pytest.mark.parametrize('kind', ['chat', 'meet'])
-def test_emotion_late_result_cannot_commit(tmp_path: Path, action: str, kind: str) -> None:
+@pytest.mark.parametrize('candidate', ['主模型原稿', '不安全改写'])
+def test_emotion_late_result_cannot_commit(tmp_path: Path, action: str, kind: str, candidate: str) -> None:
     """停止和清空均撤销普通回复与欢迎的迟到增强结果。
 
     Args:
         tmp_path: 隔离的执行目录。
         action: 增强挂起期间执行停止或清空。
         kind: 当前执行是普通聊天还是欢迎。
+        candidate: 迟到结果为原样正文或无法保真的改写。
     """
     async def scenario() -> None:
-        model, polisher = DraftModel(), PolishingModel(blocked_call=1)
+        model, polisher = DraftModel(), PolishingModel([candidate], blocked_call=1)
         service = ChatSession(configured_settings(tmp_path), model, emotion_model=polisher)
         owner = uuid4().hex
         service.emotion.select(owner, True)
@@ -204,23 +206,26 @@ def test_emotion_meet_submits_only_polished_assistant(tmp_path: Path) -> None:
         assert meet is not None
         await asyncio.wait_for(service.active[owner].task, 2)
         assert meet.status == 'completed' and meet.user_content == ''
-        assert [(message.role, message.content) for message in meet.messages] == [('assistant', '润色后的台词')]
+        assert [(message.role, message.content) for message in meet.messages] == [('assistant', '主模型原稿')]
         service.start(owner, str(uuid4()), '你好')
         await asyncio.wait_for(service.active[owner].task, 2)
-        assert any(message.role == 'assistant' and message.content == '润色后的台词' for message in model.inputs[-1])
+        assert any(message.role == 'assistant' and message.content == '主模型原稿' for message in model.inputs[-1])
         assert len(polisher.inputs) == 2
         await service.close()
 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('invalid_stage', [None, 'reaction', 'delivery'])
 def test_emotion_search_polishes_only_visible_reaction_and_delivery(tmp_path: Path,
-                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+                                                                   monkeypatch: pytest.MonkeyPatch,
+                                                                   invalid_stage: str | None) -> None:
     """搜索首段在保存和展示前润色，隐藏草稿与内部整理不进入增强模型。
 
     Args:
         tmp_path: 隔离的执行目录。
         monkeypatch: 用受控检索替代外部搜索请求。
+        invalid_stage: 指定首反应或续答返回不保真的候选结果。
     """
     async def scenario() -> None:
         searching, release = asyncio.Event(), asyncio.Event()
@@ -278,27 +283,69 @@ def test_emotion_search_polishes_only_visible_reaction_and_delivery(tmp_path: Pa
 
         monkeypatch.setattr('src.tidebound.tools.companion.operations.search_web', retrieve)
         settings = configured_settings(tmp_path).model_copy(update={'search_api_key': SecretStr('fixture')})
-        polisher = PolishingModel(['润色后的首反应', '润色后的正式续答'], blocked_call=2)
+        replies = ['搜索首反应原稿', '搜索正式续答原稿']
+        if invalid_stage is not None:
+            replies[0 if invalid_stage == 'reaction' else 1] = '不安全改写'
+        polisher = PolishingModel(replies, blocked_call=2)
         service = ChatSession(settings, SearchModel(), emotion_model=polisher)
         owner = uuid4().hex
         service.emotion.select(owner, True)
         run = service.start(owner, str(uuid4()), '给我推荐教程', internet_enabled=True)
         task = service.active[owner].task
         await asyncio.wait_for(searching.wait(), 2)
-        assert run.first_reaction == '润色后的首反应' and run.preview == run.first_reaction
+        reaction = '' if invalid_stage == 'reaction' else '搜索首反应原稿'
+        assert run.first_reaction == reaction and run.preview == reaction
         release.set()
         await asyncio.wait_for(polisher.entered.wait(), 2)
-        assert run.preview in ('', '润色后的首反应')
+        assert run.preview in ('', '搜索首反应原稿')
         assert len(polisher.inputs) == 2
         request_text = '\n'.join(message.content for call in polisher.inputs for message in call)
         assert '搜索首反应原稿' in request_text and '搜索正式续答原稿' in request_text
         assert '内部搜索草稿' not in request_text and '工具前原稿' not in request_text
         polisher.release.set()
         await asyncio.wait_for(task, 2)
-        assert run.status == 'completed'
-        assert run.messages[-1].content == '润色后的首反应\n\n润色后的正式续答'
-        assert [message.content for message in session_view(service, owner).messages] == [
-            '给我推荐教程', '润色后的首反应', '润色后的正式续答']
+        if invalid_stage == 'delivery':
+            assert run.status == 'failed' and run.error_code == 'emotion_fidelity_failed'
+            assert run.first_reaction == '' and session_view(service, owner).messages == []
+        else:
+            assert run.status == 'completed'
+            expected = [reaction, '搜索正式续答原稿'] if reaction else ['搜索正式续答原稿']
+            assert run.messages[-1].content == '\n\n'.join(expected)
+            assert [message.content for message in session_view(service, owner).messages] == [
+                '给我推荐教程', *expected]
+        assert '不安全改写' not in run.model_dump_json()
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('kind', ['chat', 'meet'])
+def test_unverified_rewrite_fails_without_polluting_history(tmp_path: Path, kind: str) -> None:
+    """协议合法但不保真的正文不进入页面、持久化成功历史或后续上下文。
+
+    Args:
+        tmp_path: 隔离的运行与事件目录。
+        kind: 普通聊天或登录问候出口。
+    """
+    async def scenario() -> None:
+        model, polisher = DraftModel(), PolishingModel(['未经确认的承诺 CANARY_RESULT_14'])
+        service = ChatSession(configured_settings(tmp_path), model, emotion_model=polisher)
+        owner = uuid4().hex
+        service.emotion.select(owner, True)
+        run = service.start(owner, str(uuid4()), '你好') if kind == 'chat' else service.prepare_meet(owner)
+        assert run is not None
+        await asyncio.wait_for(service.active[owner].task, 2)
+        assert run.status == 'failed' and run.error_code == 'emotion_fidelity_failed'
+        assert run.preview == '' and run.first_reaction == '' and run.companion_state is None
+        assert session_view(service, owner).messages == []
+        saved = service.store.list_runs(owner)
+        assert saved and all(record.status == 'failed' for record in saved)
+        assert 'CANARY_RESULT_14' not in saved[0].model_dump_json()
+        service.emotion.select(owner, False)
+        service.start(owner, str(uuid4()), '继续')
+        await asyncio.wait_for(service.active[owner].task, 2)
+        assert not any(message.role == 'assistant' for message in model.inputs[-1])
+        assert len(polisher.inputs) == 1
         await service.close()
 
     asyncio.run(scenario())

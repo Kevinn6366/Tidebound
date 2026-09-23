@@ -16,6 +16,7 @@ from src.tidebound.context.compaction import PreparedContext
 from src.tidebound.debug import TerminalDebug
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ChatCompletionsClient, ModelClient
+from src.tidebound.memory.rolling_summary import ConversationMemory
 from src.tidebound.prompting import load_chat_system, load_prompt_bundles
 from src.tidebound.runtime.agent_loop import agent_loop
 from src.tidebound.runtime.compaction import CompactionCoordinator
@@ -24,6 +25,7 @@ from src.tidebound.runtime.emotion_enhancement import EmotionEnhancement, Emotio
 from src.tidebound.runtime.events import emit_event, trace_operation
 from src.tidebound.runtime.model_channels import ModelChannels
 from src.tidebound.runtime.preview import preview_sink
+from src.tidebound.runtime.rolling_summary import RollingSummaryCoordinator
 from src.tidebound.runtime.types import ContextUsage, Message, RunRecord
 from src.tidebound.storage.model_requests import request_run
 from src.tidebound.storage.runs import ContextBudget, RunStore
@@ -32,6 +34,7 @@ from src.tidebound.tools.registry import create_tools, register_companion_tools,
 from src.tidebound.workflows.meet import run_meet
 
 WELCOME_INTERVAL = timedelta(minutes=30)
+WELCOME_TTL = timedelta(hours=1)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,7 @@ class ChatSession:
 
     def __init__(self, settings: AgentSettings, model: ModelClient | None = None,
                  summary_model: ModelClient | None = None, meet_model: ModelClient | None = None,
-                 emotion_model: ModelClient | None = None) -> None:
+                 emotion_model: ModelClient | None = None, rolling_summary_model: ModelClient | None = None) -> None:
         """组装账号隔离的聊天与后台工作流服务。
 
         Args:
@@ -57,6 +60,7 @@ class ChatSession:
             summary_model: 独立摘要模型替身，省略时沿用现有摘要配置。
             meet_model: 独立欢迎模型替身，省略时使用欢迎配置或通用测试替身。
             emotion_model: 独立情感润色模型替身，省略时使用后端云端增强配置。
+            rolling_summary_model: 长期摘要独立测试替身，未提供时沿用通用替身或独立后台配置。
 
         Raises:
             ZoneInfoNotFoundError: 配置的时区不可用。
@@ -69,6 +73,7 @@ class ChatSession:
         self.tools = create_tools(settings.timezone)
         self.store = RunStore(settings.data_dir)
         self.compaction = CompactionCoordinator(self.store, summary_model or model)
+        self.rolling_summary = RollingSummaryCoordinator(self.store, settings, rolling_summary_model or model)
         self.active: dict[str, ActiveRun] = {}
         self.resetting: set[str] = set()
         ZoneInfo(settings.timezone)
@@ -321,7 +326,7 @@ class ChatSession:
 
     def prepare_meet(self, owner: str, *, retry: bool = False,
                      trigger: Literal["login", "manual"] = "login") -> RunRecord | None:
-        """登录时预生成问候，已存在的欢迎尝试只在显式重试时重做。
+        """登录后生成问候，成功结果一小时内复用，失败尝试仅显式重试。
 
         Args:
             owner: 经鉴权的账号范围，不能由请求正文指定。
@@ -349,9 +354,16 @@ class ChatSession:
         last_chat_index = max((i for i, item in enumerate(records)
                                if item.kind == "chat" and item.status == "completed"), default=-1)
         previous = next((item for item in reversed(records[last_chat_index + 1:]) if item.kind == "meet"), None)
-        if trigger != "manual" and previous and (previous.status == "completed" or not retry):
-            return previous
         now = datetime.now(UTC)
+        if trigger != "manual" and previous:
+            if previous.status == "completed":
+                completed_at = datetime.fromisoformat(previous.completed_at or previous.created_at)
+                if completed_at.tzinfo is None:
+                    completed_at = completed_at.replace(tzinfo=UTC)
+                if now - completed_at < WELCOME_TTL:
+                    return previous
+            elif not retry:
+                return previous
         if history and trigger != "manual":
             last_time = datetime.fromisoformat(history[-1].completed_at or history[-1].created_at)
             if last_time.tzinfo is None:
@@ -411,7 +423,9 @@ class ChatSession:
             search_model = enhancement.wrap(search_model)
             meet_model = enhancement.wrap(meet_model)
         companion = CompanionTools(history, record, state, model, settings, stop,
-                                   websearch_model=search_model)
+                                   websearch_model=search_model, character_system=system,
+                                   memory=ConversationMemory(self.store, owner, record.timeline_id, history))
+        self.rolling_summary.schedule(owner, record.timeline_id)
         register_companion_tools(registry, companion, internet_enabled=record.internet_enabled)
 
         def update_preview(content: str) -> None:
@@ -486,16 +500,13 @@ class ChatSession:
                     injection = load_prompt_bundles(settings.prompts_dir, ("chat.meet",)).content
                     event = Message(role="user", content=json.dumps({
                         "event": "first_meet" if not history else "return_meet",
-                        "current_time": datetime.now(ZoneInfo(settings.timezone)).isoformat(),
-                        "timezone": settings.timezone,
                         "last_dialogue_at": (history[-1].completed_at or history[-1].created_at) if history else None,
                     }, ensure_ascii=False))
-                    prepared = await prepare_context(f"{system}\n\n{injection}", [event], [])
-                    update_context(context_usage(settings, prepared.input_used))
                     # 欢迎先完整生成，页面等待期间不展示未校验的半成品。
                     preview_sink.set(None)
                     with trace_operation(settings, 'workflow', 'meet'):
-                        message = await run_meet(prepared, meet_model, injection, stop)
+                        message = await run_meet(system, event, meet_model, injection, settings, stop,
+                                                 prepare_context, update_context)
                     record.messages = [message]
                 else:
                     await agent_loop(system, [item.messages for item in history], record.messages,
@@ -536,6 +547,7 @@ class ChatSession:
             else:
                 emit_event(settings, "storage", "commit_run", "completed", run=(owner, record.run_id))
                 if record.status == "completed":
+                    self.rolling_summary.schedule(owner, record.timeline_id)
                     try:
                         maintenance = self.settings_for(owner) if record.kind == "meet" else settings
                         maintenance_system, material = companion_context(system, state, maintenance, record.run_id)
@@ -586,6 +598,7 @@ class ChatSession:
                 active.record.preview = ""
                 await asyncio.shield(active.task)
             await self.compaction.cancel(owner)
+            await self.rolling_summary.cancel(owner)
             self.store.delete_conversation_history(owner)
         finally:
             self.resetting.discard(owner)
@@ -597,3 +610,4 @@ class ChatSession:
             active.stop.set()
         await asyncio.gather(*(active.task for active in tasks), return_exceptions=True)
         await self.compaction.close()
+        await self.rolling_summary.close()

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,8 +14,8 @@ from src.tidebound.errors import AgentError
 from src.tidebound.llm import wire_messages
 from src.tidebound.prompting import load_prompt_bundles
 from src.tidebound.runtime.session import ChatSession
-from src.tidebound.runtime.types import Message, ModelReply, RunRecord
-from src.tidebound.storage.model_requests import request_purpose
+from src.tidebound.runtime.types import Message, ModelReply, RunRecord, ToolCall
+from src.tidebound.storage.model_requests import request_injection, request_purpose, request_step
 from tests.support.account_store import FileUserStore
 from webapp.chat_service import session_view
 from webapp.config import WebSettings
@@ -38,7 +38,7 @@ class MeetModel:
         Args:
             system: 实际组装的全部系统规则。
             messages: 本次选取的历史和事件材料。
-            tools: 本次获准的工具，欢迎调用必须为空。
+            tools: 本次获准的工具，欢迎只开放时间查询。
 
         Returns:
             完整问候或被测试故意构造的无效正文。
@@ -95,8 +95,11 @@ def test_first_meet_commits_without_view_and_feeds_next_chat(tmp_path: Path) -> 
         system, messages, tools, purpose = model.inputs[0]
         for name in ("chat.character", "chat.safety", "chat.meet"):
             assert load_prompt_bundles(service.settings.prompts_dir, (name,)).content in system
-        assert tools == [] and purpose == "chat.meet"
-        assert json.loads(messages[-1].content)["event"] == "first_meet"
+        assert tools[0]["function"]["name"] == "use_tool" and purpose == "chat.meet"
+        assert "get_current_time" in tools[0]["function"]["description"]
+        event = json.loads(messages[-1].content)
+        assert event["event"] == "first_meet"
+        assert "current_time" not in event and "timezone" not in event
         assert len(session_view(service, owner).messages) == 1
         restarted = service_at(tmp_path, model)
         assert restarted.prepare_meet(owner).run_id == run.run_id
@@ -116,7 +119,7 @@ def test_first_meet_commits_without_view_and_feeds_next_chat(tmp_path: Path) -> 
 @pytest.mark.parametrize("minutes,expected", [(29, False), (30, False), (31, True)])
 def test_return_boundary_and_no_periodic_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                    minutes: int, expected: bool) -> None:
-    """精确检查 30 分钟边界，时间流逝不能解除已生成问候的去重。
+    """精确检查 30 分钟边界，未过期问候不因再次进入而重复。
 
     Args:
         tmp_path: 隔离历史目录。
@@ -151,7 +154,7 @@ def test_return_boundary_and_no_periodic_duplicate(tmp_path: Path, monkeypatch: 
             assert greeting.status == "completed"
             assert json.loads(model.inputs[0][1][-1].content)["event"] == "return_meet"
             assert model.inputs[0][1][0].content == "周末去看海"
-            Clock.current += timedelta(days=3)
+            Clock.current += timedelta(minutes=59)
             assert service.prepare_meet(owner).run_id == greeting.run_id
             assert len(model.inputs) == 1
             service.start(owner, str(uuid4()), "我回来啦")
@@ -161,6 +164,154 @@ def test_return_boundary_and_no_periodic_duplicate(tmp_path: Path, monkeypatch: 
             assert next_meet.run_id != greeting.run_id
             await service.active[owner].task
         await service.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("seconds,expired", [(3599, False), (3600, True), (3601, True)])
+def test_completed_meet_expires_only_on_authenticated_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seconds: int, expired: bool,
+) -> None:
+    """成功欢迎按完成时间过期，查询和重启不触发生成，再次进入才检查。
+
+    Args:
+        tmp_path: 隔离运行数据目录。
+        monkeypatch: 控制欢迎入口与执行使用的服务端时钟。
+        seconds: 距离旧欢迎完成的秒数。
+        expired: 再次进入是否应创建新的欢迎。
+    """
+    from src.tidebound.runtime import session
+
+    class Clock(datetime):
+        current = datetime(2026, 9, 22, 4, tzinfo=UTC)
+
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return cls.current.astimezone(tz)
+
+    monkeypatch.setattr(session, "datetime", Clock)
+
+    async def scenario() -> None:
+        model = MeetModel(wait=True)
+        service = service_at(tmp_path, model)
+        owner = uuid4().hex
+        completed = Clock.current - timedelta(seconds=seconds)
+        previous = RunRecord(
+            run_id=str(uuid4()), created_at=(completed - timedelta(minutes=5)).isoformat(),
+            completed_at=completed.isoformat(), kind="meet", status="completed", user_content="",
+            messages=[Message(role="assistant", content="旧问候")],
+        )
+        service.store.save(owner, previous)
+        await service.close()
+        service = service_at(tmp_path, model)
+        assert session_view(service, owner).meet_run.run_id == previous.run_id
+        assert not service.active and model.inputs == []
+        run = service.prepare_meet(owner)
+        assert (run.run_id != previous.run_id) == expired
+        if expired:
+            assert service.prepare_meet(owner).run_id == run.run_id
+            await asyncio.wait_for(model.entered.wait(), 2)
+            event = json.loads(model.inputs[0][1][-1].content)
+            assert "current_time" not in event
+            model.release.set()
+            await service.active[owner].task
+            assert run.status == "completed"
+            assert service.prepare_meet(owner).run_id == run.run_id
+            assert len(session_view(service, owner).messages) == 2
+        else:
+            assert model.inputs == []
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("tool_name,arguments,error", [
+    ("get_current_time", "{}", None),
+    ("get_current_time", '{"timezone":"UTC"}', "invalid_arguments"),
+    ("get_weather", "{}", "unknown_tool"),
+])
+def test_meet_model_selects_time_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tool_name: str, arguments: str, error: str | None,
+) -> None:
+    """时间仅在模型提出调用后读取，工具结果和规则不污染正式对话。
+
+    Args:
+        tmp_path: 隔离运行数据目录。
+        monkeypatch: 监测时间工具，确认没有提前读取。
+        tool_name: 模型选择的实际能力。
+        arguments: 模型给出的业务参数 JSON。
+        error: 应由工具边界返回的错误码，空值代表成功。
+    """
+    from src.tidebound.tools import registry
+
+    queried_zones: list[str] = []
+    actual_time = registry.get_current_time
+
+    def tracked_time(timezone: str) -> dict[str, str | float]:
+        """记录工具调用所使用的服务端时区。
+
+        Args:
+            timezone: 注册表绑定的时区。
+
+        Returns:
+            真实时间工具的结果。
+        """
+        queried_zones.append(timezone)
+        return actual_time(timezone)
+
+    monkeypatch.setattr(registry, "get_current_time", tracked_time)
+
+    class ToolModel(MeetModel):
+        async def complete(self, system: str, messages: list[Message], tools: list[dict[str, object]]) -> ModelReply:
+            """先由模型提出调用，再验证回填结果并生成问候。
+
+            Args:
+                system: 当前请求的完整系统规则。
+                messages: 事件、调用及工具返回消息。
+                tools: 本轮开放的时间能力声明。
+
+            Returns:
+                第一次返回工具调用，第二次返回最终问候。
+            """
+            self.inputs.append((system, list(messages), tools, request_purpose.get()))
+            assert request_purpose.get() == "chat.meet"
+            assert request_step.get() == len(self.inputs)
+            assert load_prompt_bundles(service.settings.prompts_dir, ("chat.meet",)).content in request_injection.get()
+            if len(self.inputs) == 1:
+                assert queried_zones == []
+                assert set(json.loads(messages[-1].content)) == {"event", "last_dialogue_at"}
+                assert time_rules not in system
+                assert "get_weather" not in tools[0]["function"]["description"]
+                return ModelReply(message=Message(role="assistant", content="查询时间的过渡正文", tool_calls=[
+                    ToolCall(id="meet-time", name="use_tool", arguments=json.dumps({
+                        "name": tool_name, "arguments": arguments,
+                    })),
+                ]), finish_reason="tool_calls")
+            result = json.loads(messages[-1].content)
+            assert messages[-1].role == "tool" and messages[-1].tool_call_id == "meet-time"
+            if error:
+                assert result["error"] == error and queried_zones == []
+            else:
+                assert queried_zones == ["Asia/Shanghai"]
+                assert started_at <= datetime.fromisoformat(result["datetime"]) <= datetime.now(UTC)
+            assert (time_rules in system) == (tool_name == "get_current_time")
+            return ModelReply(message=Message(role="assistant", content="你来啦。"), finish_reason="stop")
+
+    model = ToolModel()
+    service = service_at(tmp_path, model)
+    time_rules = load_prompt_bundles(service.settings.prompts_dir, ("tools.injection.timetools",)).content
+    started_at = datetime.now(UTC)
+
+    async def scenario() -> None:
+        owner = uuid4().hex
+        run = service.prepare_meet(owner)
+        await service.active[owner].task
+        assert run.status == "completed", run.error
+        assert len(model.inputs) == 2
+        assert [(message.role, message.content) for message in run.messages] == [("assistant", "你来啦。")]
+        assert run.preview != "查询时间的过渡正文"
+        await service.close()
+
     asyncio.run(scenario())
 
 
@@ -237,8 +388,14 @@ def test_meet_api_isolation_sse_and_legacy_times(tmp_path: Path) -> None:
         app = create_app(WebSettings(ui_data_dir=tmp_path / "ui"), settings, model,
                          FileUserStore(tmp_path / "users.json"))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            assert not app.state.chat.active
+            assert model.inputs == []
             assert (await client.post("/api/chat/meet")).status_code == 401
+            assert model.inputs == []
+            assert not app.state.chat.active
             assert (await client.post("/api/auth/setup", json={"username": "admin", "password": "password123"})).status_code == 201
+            assert (await client.get("/api/chat/session")).json()["meet_run"] is None
+            assert model.inputs == []
             response = await client.post("/api/chat/meet")
             assert response.status_code == 200
             run_id = response.json()["active_run"]["run_id"]

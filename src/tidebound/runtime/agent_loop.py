@@ -23,7 +23,8 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
                      model: ModelClient, settings: AgentSettings, stop: asyncio.Event, registry: ToolMap,
                      on_context: Callable[[ContextUsage], None] | None = None,
                      prepare_context: Callable[[str, list[Message], list[dict[str, object]]],
-                                               Awaitable[PreparedContext]] | None = None) -> list[Message]:
+                                               Awaitable[PreparedContext]] | None = None,
+                     *, base_injection: str = "") -> list[Message]:
     """执行有限模型循环，记录中间消息但仅返回完整轮次。
 
     Args:
@@ -36,6 +37,7 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
         registry: 已授权的工具注册表；tail_injection 触发后在本轮后续主请求末尾持续生效。
         on_context: 模型请求前接收实际预算用量的可选展示回调。
         prepare_context: 会话提供的后台摘要与上下文组装入口。
+        base_injection: 已包含在 system 中的工作流规则，仅用于每次请求的注入审计。
 
     Returns:
         包含用户消息、工具链和最终回复的本轮消息。
@@ -54,7 +56,7 @@ async def agent_loop(system: str, history: list[list[Message]], current: list[Me
         publish_preview("")
         tail = "\n\n".join(tail_rules.values())
         request_system = "\n\n".join(part for part in (system, injection) if part)
-        current_injection = "\n\n".join(part for part in (injection, tail) if part)
+        current_injection = "\n\n".join(part for part in (base_injection, injection, tail) if part)
         injection = ""  # 上批工具规则仅用于紧接着的一次请求，不进入消息历史。
         # 表达规则必须紧邻本次生成；只放在首条 system 末尾仍会被长历史隔开。
         # 使用请求副本，临时 system 参与预算和审计，但不成为可回忆的对话。

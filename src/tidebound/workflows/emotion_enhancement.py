@@ -1,18 +1,41 @@
 """用单次无历史、无工具的 instruct 调用润色即将展示的角色正文。"""
 
 import asyncio
+import json
 from dataclasses import dataclass
 
 from src.tidebound.config import AgentSettings
 from src.tidebound.context.budget import select_messages
 from src.tidebound.errors import AgentError
 from src.tidebound.llm import ModelClient
+from src.tidebound.runtime.events import trace_operation
 from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.types import Message, ModelReply
 from src.tidebound.storage.model_requests import request_injection, request_purpose
 
 ENHANCEMENT_PURPOSE = "emotion.enhancement"
 VISIBLE_WORKFLOWS = frozenset({"chat.meet", "tools.websearch.reaction", "tools.websearch.delivery"})
+
+
+def validate_fidelity(draft: str, candidate: str) -> str:
+    """仅放行可确定保真的原样结果，拒绝未经验证的自由改写。
+
+    首尾空白可由供应商包装引入，但始终返回原稿以保留原始格式。
+    不删除标点、折叠段落或使用相似度阈值，避免否定、问句及引用被改变。
+
+    Args:
+        draft: 主模型已完成的角色正文，不包含内部上下文。
+        candidate: 已通过协议检查的增强模型正文。
+
+    Returns:
+        与候选正文一致的完整原稿，保留原稿首尾空白。
+
+    Raises:
+        AgentError: 候选正文发生无法确定保真的改写，本轮不得提交。
+    """
+    if candidate.strip() != draft.strip():
+        raise AgentError("emotion_fidelity_failed", "云端情感增强改动了原稿，无法确认保真，本轮未提交。", 502)
+    return draft
 
 
 @dataclass(frozen=True)
@@ -42,13 +65,13 @@ class EmotionEnhancementRun:
             draft: 已正常完成、即将对用户说出的单段回复原稿。
 
         Returns:
-            通过完整性检查的润色正文。
+            通过协议与保真检查的正文；当前仅放行原样结果。
 
         Raises:
-            AgentError: 请求失败、超时、超出预算或润色结果不完整。
+            AgentError: 请求失败、超时、超出预算、结果不完整或无法确认保真。
             OSError: 审计快照无法保存。
         """
-        content = self.instruction + "\n\n" + draft
+        content = self.instruction + "\n\n" + json.dumps({"draft": draft}, ensure_ascii=False)
         messages = select_messages(self.system, [], [Message(role="user", content=content)], [], self.settings)
         purpose_token = request_purpose.set(ENHANCEMENT_PURPOSE)
         injection_token = request_injection.set(None)
@@ -60,11 +83,14 @@ class EmotionEnhancementRun:
             except TimeoutError as error:
                 raise AgentError("emotion_timeout", "云端情感增强超时，本轮未提交。", 504) from error
             except AgentError as error:
-                raise AgentError("emotion_model_error", f"云端情感增强失败：{error}", error.status) from error
-            if (reply.finish_reason != "stop" or reply.message.role != "assistant"
-                    or reply.message.tool_calls or not reply.message.content.strip()):
-                raise AgentError("emotion_incomplete", "云端情感增强没有返回完整正文，本轮未提交。", 502)
-            return reply.message.content.strip()
+                # 第三方错误可能反射请求头或正文，不能拼入可见错误或异常链。
+                raise AgentError("emotion_model_error", "云端情感增强请求失败，本轮未提交。", error.status) from None
+            with trace_operation(self.settings, "validation", "emotion.protocol"):
+                if (reply.finish_reason != "stop" or reply.message.role != "assistant"
+                        or reply.message.tool_calls or not reply.message.content.strip()):
+                    raise AgentError("emotion_incomplete", "云端情感增强没有返回完整正文，本轮未提交。", 502)
+            with trace_operation(self.settings, "validation", "emotion.fidelity"):
+                return validate_fidelity(draft, reply.message.content)
         finally:
             preview_sink.reset(preview_token)
             request_injection.reset(injection_token)

@@ -113,3 +113,10 @@ prompts:
           name: tools.websearch.delivery-zh
           segments:
             - content: "@master/tools.websearch/delivery.md"
+  memory.rolling_summary:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: memory.rolling_summary-zh
+          segments:
+            - content: "@master/memory.rolling_summary/summary-zh.md"
