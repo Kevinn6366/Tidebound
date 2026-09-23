@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from src.tidebound.config import AgentSettings
 from src.tidebound.llm import ChatCompletionsClient, ModelClient
@@ -17,13 +18,15 @@ logger = logging.getLogger(__name__)
 class RollingSummaryCoordinator:
     """合并连续提交，生成期间新增的对话在下一次循环追赶。"""
 
-    def __init__(self, runs: RunStore, settings: AgentSettings, model: ModelClient | None = None) -> None:
+    def __init__(self, runs: RunStore, settings: AgentSettings, model: ModelClient | None = None,
+                 settings_for_owner: Callable[[str], AgentSettings] | None = None) -> None:
         """绑定独立后台预算，默认使用基础模型渠道。
 
         Args:
             runs: 已鉴权历史的持久化入口。
             settings: 服务启动配置，不继承单轮临时主模型渠道。
             model: 可选后台模型替身。
+            settings_for_owner: 按账号取得已保存密钥的配置入口。
         """
         self.runs = runs
         self.summaries = RollingSummaryStore(runs.root)
@@ -33,6 +36,7 @@ class RollingSummaryCoordinator:
             'max_output_tokens': settings.rolling_summary_max_output_tokens,
         })
         self.model = model or ChatCompletionsClient(self.settings)
+        self.settings_for_owner = settings_for_owner
         self.jobs: dict[str, asyncio.Task[None]] = {}
         self.closed = False
 
@@ -93,12 +97,20 @@ class RollingSummaryCoordinator:
                     return
                 token = request_run.set((owner, records[-1].run_id))
                 try:
+                    account = self.settings_for_owner(owner) if self.settings_for_owner else self.settings
+                    summary_settings = account.model_copy(update={
+                        'model': self.settings.rolling_summary_model or account.model,
+                        'context_limit': self.settings.context_limit,
+                        'max_output_tokens': self.settings.max_output_tokens,
+                    })
+                    summary_model = self.model if self.settings_for_owner is None or not isinstance(
+                        self.model, ChatCompletionsClient) else ChatCompletionsClient(summary_settings)
                     async with asyncio.timeout(self.settings.timeout_seconds):
                         # 供应商偶发多余括号等结构错误时只重试一次，仍不发布半成品。
                         feedback = ''
                         for attempt in range(2):
                             try:
-                                candidate = await generate_summary(previous, records, self.settings, self.model,
+                                candidate = await generate_summary(previous, records, summary_settings, summary_model,
                                                                    validation_feedback=feedback)
                                 break
                             except ValueError as error:

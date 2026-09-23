@@ -10,11 +10,11 @@ docker compose version >/dev/null
 if [[ ! -f .env ]]; then
     cp deploy/.env.production.example .env
     chmod 600 .env
-    echo "已创建 .env。请填写模型密钥和两个 MySQL 密码，然后重新运行 ./deploy.sh。" >&2
+    echo "已创建 .env。请填写两个 MySQL 密码，然后重新运行 ./deploy.sh；登录后可为每个账号配置硅基流动 API Key。" >&2
     exit 1
 fi
 
-for key in TIDEBOUND_LLM_API_KEY TIDEBOUND_MYSQL_PASSWORD TIDEBOUND_MYSQL_ROOT_PASSWORD; do
+for key in TIDEBOUND_MYSQL_PASSWORD TIDEBOUND_MYSQL_ROOT_PASSWORD; do
     if ! awk -F= -v key="$key" '$1 == key && length($0) > length(key) + 1 { found=1 } END { exit !found }' .env; then
         echo ".env 中缺少 $key 的值。" >&2
         exit 1

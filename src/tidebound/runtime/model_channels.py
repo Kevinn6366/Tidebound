@@ -7,6 +7,9 @@ from src.tidebound.config import AgentSettings
 from src.tidebound.errors import AgentError
 from src.tidebound.storage.model_channel import ChannelId, ChannelSelection, ModelChannelStore
 
+SILICONFLOW_BASE_URL = 'https://api.siliconflow.cn/v1'
+SILICONFLOW_MODEL = 'zai-org/GLM-5.3'
+
 
 class ChannelView(BaseModel):
     id: ChannelId

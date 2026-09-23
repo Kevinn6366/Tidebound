@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from pydantic import SecretStr
+
 from src.tidebound.config import AgentSettings
 from src.tidebound.context.budget import FORMAT_MARGIN, context_usage
 from src.tidebound.context.compaction import PreparedContext
@@ -23,10 +25,11 @@ from src.tidebound.runtime.compaction import CompactionCoordinator
 from src.tidebound.runtime.companion import companion_context, load_state
 from src.tidebound.runtime.emotion_enhancement import EmotionEnhancement, EmotionEnhancementRun
 from src.tidebound.runtime.events import emit_event, trace_operation
-from src.tidebound.runtime.model_channels import ModelChannels
+from src.tidebound.runtime.model_channels import SILICONFLOW_BASE_URL, SILICONFLOW_MODEL, ModelChannels
 from src.tidebound.runtime.preview import preview_sink
 from src.tidebound.runtime.rolling_summary import RollingSummaryCoordinator
 from src.tidebound.runtime.types import ContextUsage, Message, RunRecord
+from src.tidebound.storage.model_credentials import ModelCredentialStore
 from src.tidebound.storage.model_requests import request_run
 from src.tidebound.storage.runs import ContextBudget, RunStore
 from src.tidebound.tools.companion.operations import CompanionTools
@@ -68,12 +71,14 @@ class ChatSession:
         self.settings = settings
         self.model = model
         self.channels = ModelChannels(settings)
+        self.model_credentials = ModelCredentialStore(settings.data_dir)
         self.emotion = EmotionEnhancement(settings, emotion_model)
         self.meet_model = meet_model or model
         self.tools = create_tools(settings.timezone)
         self.store = RunStore(settings.data_dir)
         self.compaction = CompactionCoordinator(self.store, summary_model or model)
-        self.rolling_summary = RollingSummaryCoordinator(self.store, settings, rolling_summary_model or model)
+        self.rolling_summary = RollingSummaryCoordinator(
+            self.store, settings, rolling_summary_model or model, settings_for_owner=self.settings_for)
         self.active: dict[str, ActiveRun] = {}
         self.resetting: set[str] = set()
         ZoneInfo(settings.timezone)
@@ -92,7 +97,18 @@ class ChatSession:
             ValueError: 保存的配置损坏。
         """
         budget = self.store.load_context_budget(owner)
-        return self.channels.resolve().model_copy(update={} if budget is None else {"context_limit": budget.context_limit})
+        credential = self.model_credentials.load(owner)
+        selected = self.channels.resolve('siliconflow') if credential is not None else self.channels.resolve()
+        updates: dict[str, object] = {}
+        if credential is not None:
+            updates.update({'api_key': credential, 'base_url': SILICONFLOW_BASE_URL,
+                            'model': SILICONFLOW_MODEL})
+        elif self.settings.mode == 'prod':
+            # 生产账号必须配置自己的密钥，不能自动花费服务器全局额度。
+            updates['api_key'] = SecretStr('')
+        if budget is not None:
+            updates['context_limit'] = budget.context_limit
+        return selected.model_copy(update=updates)
 
     def companion_budget_material(self, records: list[RunRecord], settings: AgentSettings
                                   ) -> tuple[str, list[Message], list[dict[str, object]]]:
@@ -201,7 +217,8 @@ class ChatSession:
     @property
     def configured(self) -> bool:
         settings = self.channels.resolve()
-        return bool(settings.mode == "dev" and settings.base_url and settings.model)
+        return bool(settings.mode == "prod" or
+                    (settings.mode == "dev" and settings.base_url and settings.model))
 
     def records(self, owner: str, *, include_archived: bool = False) -> list[RunRecord]:
         """恢复遗留执行并读取有效时间线，不重放工具。
@@ -261,8 +278,8 @@ class ChatSession:
         Raises:
             AgentError: 配置、并发或提示词不合法。
         """
-        if self.settings.mode != "dev":
-            raise AgentError("dev_only", "v0.01 只支持本地单 worker dev。", 503)
+        if self.settings.mode not in ("dev", "prod"):
+            raise AgentError("invalid_mode", "服务运行模式无效。", 503)
         if owner in self.resetting:
             raise AgentError("context_resetting", "正在清空上下文，请稍后发送。", 409)
         all_records = self.records(owner, include_archived=True)
@@ -278,6 +295,8 @@ class ChatSession:
         if owner in self.active:
             raise AgentError("session_busy", "当前回复尚未结束，请等待或停止后再发送。", 409)
         settings = self.settings_for(owner)
+        if settings.mode == 'prod' and not settings.api_key.get_secret_value():
+            raise AgentError('model_not_configured', '请先在模型接口设置中配置本账号的硅基流动 API Key。', 503)
         url = urlsplit(settings.base_url)
         if not settings.model or url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
             raise AgentError("model_not_configured", "请在后端 .env 配置模型服务地址、模型名和所需凭据。", 503)
@@ -370,15 +389,20 @@ class ChatSession:
                 last_time = last_time.replace(tzinfo=UTC)
             if now - last_time <= WELCOME_INTERVAL:
                 return None
-        settings = self.settings_for(owner).model_copy(update={
-            "model": self.settings.meet_model,
-            "base_url": self.settings.meet_base_url or self.settings.base_url,
-            "api_key": self.settings.meet_api_key if self.settings.meet_api_key.get_secret_value() else self.settings.api_key,
+        account_settings = self.settings_for(owner)
+        dedicated_meet = self.settings.mode == 'dev'
+        settings = account_settings.model_copy(update={
+            "model": self.settings.meet_model if dedicated_meet else account_settings.model,
+            "base_url": (self.settings.meet_base_url or self.settings.base_url) if dedicated_meet else account_settings.base_url,
+            "api_key": (self.settings.meet_api_key if self.settings.meet_api_key.get_secret_value()
+                        else self.settings.api_key) if dedicated_meet else account_settings.api_key,
             "max_output_tokens": 1024, "reasoning_effort": "low",
             "timeout_seconds": self.settings.meet_timeout_seconds,
         })
+        if settings.mode == 'prod' and not settings.api_key.get_secret_value():
+            return None
         url = urlsplit(settings.base_url)
-        if (settings.mode != "dev" or not settings.model or url.scheme not in ("http", "https")
+        if (settings.mode not in ("dev", "prod") or not settings.model or url.scheme not in ("http", "https")
                 or not url.hostname or url.username or url.password):
             raise AgentError("model_not_configured", "请在后端配置欢迎模型服务。", 503)
         bundle = load_chat_system(settings.prompts_dir)
@@ -413,8 +437,10 @@ class ChatSession:
         model = self.model or ChatCompletionsClient(settings)
         search_settings = settings.model_copy(update={
             'model': self.settings.websearch_model,
-            'base_url': self.settings.websearch_base_url or self.settings.base_url,
-            'api_key': self.settings.websearch_api_key if self.settings.websearch_api_key.get_secret_value() else self.settings.api_key,
+            'base_url': (self.settings.websearch_base_url or self.settings.base_url
+                         if settings.mode == 'dev' else settings.base_url),
+            'api_key': (self.settings.websearch_api_key if self.settings.websearch_api_key.get_secret_value()
+                        else self.settings.api_key) if settings.mode == 'dev' else settings.api_key,
         })
         search_model = self.model or ChatCompletionsClient(search_settings)
         meet_model = self.meet_model or ChatCompletionsClient(settings)

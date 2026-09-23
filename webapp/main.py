@@ -19,6 +19,7 @@ from webapp.auth.service import AuthService
 from webapp.chat import router as chat_router
 from webapp.config import WebSettings
 from webapp.console import router as console_router
+from webapp.model_credentials import router as model_credentials_router
 from webapp.routes import router
 from webapp.ui_routes import router as ui_router
 
@@ -77,6 +78,7 @@ def create_app(settings: WebSettings | None = None, agent_settings: AgentSetting
 
     application.include_router(auth_router)
     application.include_router(console_router)
+    application.include_router(model_credentials_router)
     application.include_router(chat_router)
     application.include_router(ui_router)
     application.include_router(router)

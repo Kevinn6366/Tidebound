@@ -1,13 +1,13 @@
 import { frontendFetch as fetch } from '../../../services/frontendFetch';
+import AccountModelKey from '../../../components/AccountModelKey';
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext';
-import SettingSlider from '../ui/SettingSlider';
 import SettingSectionTitle from '../ui/SettingSectionTitle';
 import SettingToggle from '../ui/SettingToggle';
-import { Plus, Edit3, Trash2, RefreshCw, Cpu, CheckCircle, XCircle, Loader2, Download, ExternalLink, Box, Upload, Server } from 'lucide-react';
+import { RefreshCw, Cpu, CheckCircle, XCircle, Loader2, Download, ExternalLink, Box, Upload, Server } from 'lucide-react';
 
 export default function ApiTab() {
-  const { settings, setSettings, availableModels, isFetchingModels, fetchOpenAIModels, saveApiProfile, applyApiProfile, renameApiProfile, deleteApiProfile } = useApp();
+  const { settings, setSettings } = useApp();
 
   // OpenCode 跟随启动开关。存于服务端 userdata/launcher_config.json，
   // 因为读取方是启动批处理（.bat），拿不到浏览器 localStorage。
@@ -206,56 +206,10 @@ export default function ApiTab() {
   return (
     <div className="space-y-8 animate-fade-in">
       <SettingSectionTitle title="大语言模型 (LLM) 接口配置" />
-      <div className="bg-white/60 p-6 rounded-xl border border-[#e6d5b8] shadow-sm space-y-6">
-        <div>
-          <label className="block text-sm font-bold text-[#ba3f42] mb-2"><span className="text-sm">✱</span> 接口地址 (Base URL)</label>
-          <input type="text" value={settings.openaiBaseUrl} onChange={e => setSettings({...settings, openaiBaseUrl: e.target.value})} className="w-full bg-white border border-[#d9c5b2] text-[#4a4036] font-bold rounded-md px-4 py-2 outline-none shadow-inner focus:border-[#ba3f42]" />
-        </div>
-        <div>
-          <label className="block text-sm font-bold text-[#ba3f42] mb-2"><span className="text-sm">✱</span> API Key</label>
-          <input type="password" value={settings.openaiApiKey} onChange={e => setSettings({...settings, openaiApiKey: e.target.value})} className="w-full bg-white border border-[#d9c5b2] text-[#4a4036] font-bold rounded-md px-4 py-2 outline-none shadow-inner focus:border-[#ba3f42]" />
-        </div>
-        <div className="flex flex-col md:flex-row items-end gap-3">
-          <div className="flex-1 relative w-full">
-            <label className="block text-sm font-bold text-[#ba3f42] mb-2"><span className="text-sm">✱</span> 模型名称</label>
-            <input type="text" list="model-suggestions" value={settings.aiModel} onChange={e => setSettings({...settings, aiModel: e.target.value})} className="w-full bg-white border border-[#d9c5b2] text-[#4a4036] font-bold rounded-md px-4 py-2 outline-none shadow-inner focus:border-[#ba3f42]" />
-            <datalist id="model-suggestions">{availableModels.map(m => <option key={m} value={m} />)}</datalist>
-          </div>
-          <button onClick={fetchOpenAIModels} disabled={isFetchingModels} className="bg-[#4fa0d8] hover:bg-[#5db4f0] disabled:opacity-50 text-white px-5 py-2 rounded-lg font-bold transition-colors flex items-center justify-center shadow-md h-[40px] w-full md:w-auto">
-            <RefreshCw size={16} className={`mr-2 ${isFetchingModels ? "animate-spin" : ""}`} /> 探测模型
-          </button>
-        </div>
-        <div className="pt-4 border-t border-dashed border-[#e6d5b8]">
-          <SettingSlider label="模型创造力 (Temperature)" value={settings.aiTemperature || 0.7} min={0.0} max={2.0} step={0.1} suffix="" onChange={v => setSettings({...settings, aiTemperature: v})} />
-        </div>
-        <div className="pt-4 border-t border-[#e6d5b8] flex justify-end">
-          <button onClick={saveApiProfile} className="px-4 py-2 bg-[#8fbf8f] hover:bg-[#7ebd7e] text-white font-bold text-sm rounded-full flex items-center transition-colors shadow-md"><Plus size={16} className="mr-1.5" /> 存为新配置</button>
-        </div>
-      </div>
+      <AccountModelKey />
 
-      <SettingSectionTitle title="模型接口配置库" />
+      <SettingSectionTitle title="本地模型管理" />
       <div className="bg-white/60 p-6 rounded-xl border border-[#e6d5b8] shadow-sm space-y-6">
-        {/* 已保存的配置 */}
-        {settings.apiProfiles?.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-64 overflow-y-auto light-scrollbar pr-2">
-            {settings.apiProfiles.map(profile => (
-              <div key={profile.id} className="flex flex-col p-4 bg-white border-2 border-[#e6d5b8] rounded-xl hover:border-[#4fa0d8] transition-colors shadow-sm">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-base font-black text-[#4fa0d8] truncate">{profile.name}</span>
-                  <div className="flex gap-1.5 shrink-0">
-                    <button onClick={() => applyApiProfile(profile)} className="px-3 py-1 bg-[#4fa0d8] hover:bg-[#5db4f0] text-white font-bold text-xs rounded-full transition-colors shadow-sm">加载</button>
-                    <button onClick={() => renameApiProfile(profile.id, profile.name)} className="p-1 text-[#8fbf8f] hover:bg-[#eaf4ea] rounded transition-colors"><Edit3 size={16}/></button>
-                    <button onClick={() => deleteApiProfile(profile.id)} className="p-1 text-red-400 hover:bg-red-50 rounded transition-colors"><Trash2 size={16}/></button>
-                  </div>
-                </div>
-                <span className="text-xs text-[#7a6b5d] font-bold truncate">模型: <span className="bg-gray-100 px-1 py-0.5 rounded text-gray-700">{profile.model}</span></span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center text-[#a89578] text-sm py-8 font-bold border-2 border-dashed border-[#e6d5b8] rounded-xl bg-white/40">暂无保存的配置。</div>
-        )}
-
         {/* ========== 本地模型下载 (Ollama) ========== */}
         <div className="pt-6 border-t-2 border-[#e6d5b8]">
           <div className="flex items-center gap-2 mb-4">
