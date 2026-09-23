@@ -1,0 +1,36 @@
+"""已迁移的只读展示接口契约。"""
+
+from typing import Literal
+
+from pydantic import BaseModel
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    service: Literal["tidebound-webapp"] = "tidebound-webapp"
+
+
+class CapabilitiesResponse(BaseModel):
+    mode: Literal["agent-dev"] = "agent-dev"
+    chat_interface: Literal[True] = True
+    settings: Literal[True] = True
+    chat: bool = False
+    authentication: Literal[True] = True
+    history: Literal[True] = True
+    character: Literal["atri"] = "atri"
+    tools: list[str] = ["get_current_time"]
+    live2d: Literal[True] = True
+
+
+class LoginConfigResponse(BaseModel):
+    loginPageTitle: str = "汐伴 · Tidebound"
+    loginPageSubTitle: str = "GalGame Web Chat"
+
+
+class ModelAsset(BaseModel):
+    name: str
+    path: str
+
+
+class ModelListResponse(BaseModel):
+    models: list[ModelAsset]

@@ -1,0 +1,379 @@
+import { getSessionUser, requireSession } from './authClient';
+
+export interface ChatMessageInput {
+  run_id: string;
+  content: string;
+  internet_enabled?: boolean;
+  attachments: { type: string; name: string; data: string }[];
+}
+export interface ContextUsage {
+  total: number;
+  input_used: number | null;
+  output_reserved: number;
+  format_margin: number;
+}
+export interface EmotionEnhancementSettings {
+  enabled: boolean;
+  configured: boolean;
+  model: string;
+}
+
+export interface RunView {
+  kind: 'chat' | 'meet';
+  created_at: string;
+  completed_at: string | null;
+  display_started_at: string | null;
+  display_revision: number;
+  display_pending: boolean;
+  context_usage: ContextUsage | null;
+  run_id: string;
+  status: 'running' | 'completed' | 'stopped' | 'failed' | 'interrupted';
+  phase: 'generating' | 'compacting';
+  tools: { call_id: string; name: string; arguments: string; result: string | null }[];
+  preview: string;
+  first_reaction?: string;
+  reaction_display_started_at?: string | null;
+  preview_stage?: 'reaction' | 'answer';
+  user_content: string;
+  reply: string | null;
+  error: string | null;
+}
+export interface SessionView {
+  timezone: string;
+  meet_run: RunView | null;
+  context_usage: ContextUsage | null;
+  character: 'atri';
+  character_name: '亚托莉';
+  messages: { id: string; role: 'user' | 'assistant'; content: string; kind: 'chat' | 'meet'; created_at: string | null; time_estimated: boolean; display_revision: number; display_pending: boolean }[];
+  active_run: RunView | null;
+  tool_runs: RunView[];
+}
+
+/**
+ * 读取同源通信结果，保留后端安全错误说明。
+ * @param path - 固定的对话接口路径。
+ * @param init - 请求方法和正文。
+ * @returns 尚需结构校验的响应数据。
+ * @throws 网络、HTTP 或 JSON 错误。
+ */
+async function request(path: string, init?: RequestInit): Promise<unknown> {
+  const headers = new Headers(init?.headers);
+  const user = getSessionUser();
+  if (user) headers.set('X-Tidebound-Uid', user.uid);
+  const response = await fetch(path, { ...init, headers, credentials: 'same-origin' });
+  requireSession(response);
+  const data: unknown = await response.json();
+  if (!response.ok) {
+    if (typeof data === 'object' && data !== null && 'detail' in data) {
+      const detail = data.detail;
+      if (typeof detail === 'object' && detail !== null && 'message' in detail && typeof detail.message === 'string') {
+        throw new Error(detail.message);
+      }
+    }
+    throw new Error(`请求失败（${response.status}）`);
+  }
+  return data;
+}
+
+/**
+ * 校验后端实际预算统计，保留尚未请求时的未知输入状态。
+ * @param data - 未知的预算对象。
+ * @returns 已校验的用量，旧执行未记录时为空。
+ * @throws 预算字段非法。
+ */
+function parseContextUsage(data: unknown): ContextUsage | null {
+  if (data === null) return null;
+  if (typeof data !== 'object' || data === null
+    || !('total' in data) || typeof data.total !== 'number' || data.total <= 0
+    || !('input_used' in data) || (data.input_used !== null && (typeof data.input_used !== 'number' || data.input_used < 0))
+    || !('output_reserved' in data) || typeof data.output_reserved !== 'number' || data.output_reserved < 0
+    || !('format_margin' in data) || typeof data.format_margin !== 'number' || data.format_margin < 0) throw new Error('上下文预算格式非法');
+  return { total: data.total, input_used: data.input_used, output_reserved: data.output_reserved, format_margin: data.format_margin };
+}
+
+/**
+ * 检查执行视图，拒绝把非法响应当作成功回复。
+ * @param data - 服务端返回的未知数据。
+ * @returns 经过结构校验的执行视图。
+ * @throws 执行状态或正文类型非法。
+ */
+function parseRun(data: unknown): RunView {
+  if (typeof data !== 'object' || data === null || !('run_id' in data) || typeof data.run_id !== 'string'
+    || !('kind' in data) || (data.kind !== 'chat' && data.kind !== 'meet')
+    || !('created_at' in data) || typeof data.created_at !== 'string' || !Number.isFinite(Date.parse(data.created_at))
+    || !('display_started_at' in data) || (data.display_started_at !== null && (typeof data.display_started_at !== 'string' || !Number.isFinite(Date.parse(data.display_started_at))))
+    || !('display_revision' in data) || !Number.isInteger(data.display_revision) || Number(data.display_revision) < 0
+    || !('display_pending' in data) || typeof data.display_pending !== 'boolean'
+    || !('completed_at' in data) || (data.completed_at !== null && (typeof data.completed_at !== 'string' || !Number.isFinite(Date.parse(data.completed_at))))
+    || !('status' in data) || !['running', 'completed', 'stopped', 'failed', 'interrupted'].includes(String(data.status))
+    || !('preview' in data) || typeof data.preview !== 'string'
+    || !('user_content' in data) || typeof data.user_content !== 'string'
+    || !('reply' in data) || (data.reply !== null && typeof data.reply !== 'string')
+    || !('error' in data) || (data.error !== null && typeof data.error !== 'string')) {
+    throw new Error('执行响应格式非法');
+  }
+  if (!('tools' in data) || !Array.isArray(data.tools) || data.tools.some((tool: unknown) =>
+    typeof tool !== 'object' || tool === null
+    || !('call_id' in tool) || typeof tool.call_id !== 'string'
+    || !('name' in tool) || typeof tool.name !== 'string'
+    || !('arguments' in tool) || typeof tool.arguments !== 'string'
+    || !('result' in tool) || (tool.result !== null && typeof tool.result !== 'string'))) {
+    throw new Error('工具记录格式非法');
+  }
+  if (data.status === 'completed' && (typeof data.reply !== 'string' || !data.reply.trim())) {
+    throw new Error('模型没有返回完整回复');
+  }
+  if (!('context_usage' in data)) throw new Error('缺少上下文用量');
+  if ('first_reaction' in data && typeof data.first_reaction !== 'string') throw new Error('第一反应格式非法');
+  if ('preview_stage' in data && data.preview_stage !== 'reaction' && data.preview_stage !== 'answer') throw new Error('回复阶段格式非法');
+  if ('reaction_display_started_at' in data && data.reaction_display_started_at !== null
+    && (typeof data.reaction_display_started_at !== 'string' || !Number.isFinite(Date.parse(data.reaction_display_started_at)))) throw new Error('第一反应时间格式非法');
+  const phase = 'phase' in data ? data.phase : 'generating';
+  if (phase !== 'generating' && phase !== 'compacting') throw new Error('执行阶段格式非法');
+  return { ...data, phase, context_usage: parseContextUsage(data.context_usage) } as RunView;
+}
+
+/**
+ * 读取固定 atri 的服务端已提交历史。
+ * @returns 经结构校验的会话快照。
+ * @throws 网络、HTTP 或结构错误。
+ */
+export async function loadChatSession(): Promise<SessionView> {
+  return parseSession(await request('/api/chat/session'));
+}
+
+/**
+ * 校验会话查询与重置返回的统一视图。
+ * @param data - 服务端未知响应。
+ * @returns 已校验的会话视图。
+ * @throws 响应结构非法。
+ */
+function parseSession(data: unknown): SessionView {
+  if (typeof data !== 'object' || data === null || !('character' in data) || data.character !== 'atri'
+    || !('timezone' in data) || typeof data.timezone !== 'string' || !('meet_run' in data)
+    || !('character_name' in data) || data.character_name !== '亚托莉'
+    || !('context_usage' in data)
+    || !('tool_runs' in data) || !Array.isArray(data.tool_runs)
+    || !('messages' in data) || !Array.isArray(data.messages) || !('active_run' in data)) {
+    throw new Error('会话响应格式非法');
+  }
+  const messages = data.messages.map((item: unknown): SessionView['messages'][number] => {
+    if (typeof item !== 'object' || item === null || !('id' in item) || typeof item.id !== 'string'
+      || !('role' in item) || (item.role !== 'user' && item.role !== 'assistant')
+      || !('created_at' in item) || (item.created_at !== null && (typeof item.created_at !== 'string' || !Number.isFinite(Date.parse(item.created_at))))
+      || !('display_revision' in item) || typeof item.display_revision !== 'number' || !Number.isInteger(item.display_revision) || item.display_revision < 0
+      || !('display_pending' in item) || typeof item.display_pending !== 'boolean'
+      || !('time_estimated' in item) || typeof item.time_estimated !== 'boolean'
+      || !('kind' in item) || (item.kind !== 'chat' && item.kind !== 'meet')
+      || !('content' in item) || typeof item.content !== 'string') throw new Error('历史消息格式非法');
+    return { id: item.id, role: item.role, content: item.content, kind: item.kind, created_at: item.created_at, time_estimated: item.time_estimated, display_revision: item.display_revision, display_pending: item.display_pending };
+  });
+  return { timezone: data.timezone, meet_run: data.meet_run === null ? null : parseRun(data.meet_run), character: 'atri', character_name: '亚托莉', context_usage: parseContextUsage(data.context_usage), messages, tool_runs: data.tool_runs.map(parseRun),
+    active_run: data.active_run === null ? null : parseRun(data.active_run) };
+}
+
+/**
+ * 提交正文，不向后端传模型历史、提示词或凭据。
+ * @param input - 用户输入与幂等执行 ID。
+ * @returns 可查询的执行状态。
+ * @throws 后端拒绝或通信失败。
+ */
+export async function submitChatMessage(input: ChatMessageInput): Promise<RunView> {
+  return parseRun(await request('/api/chat/messages', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  }));
+}
+
+/**
+ * 查询一轮执行。
+ * @param id - 后端接受的执行 UUID。
+ * @returns 当前执行状态。
+ */
+export async function readChatRun(id: string): Promise<RunView> {
+  return parseRun(await request(`/api/chat/runs/${encodeURIComponent(id)}`));
+}
+
+/**
+ * 请求停止指定执行；断开页面不调用此接口。
+ * @param id - 用户明确要停止的执行 UUID。
+ * @returns 后端收到请求时的执行状态。
+ */
+export async function stopChatRun(id: string): Promise<RunView> {
+  return parseRun(await request(`/api/chat/runs/${encodeURIComponent(id)}/stop`, { method: 'POST' }));
+}
+
+
+/**
+ * 订阅模型生成中的正文快照，连接中断由调用方重连，不能隐式停止 Run。
+ * @param id - 当前账号的执行 UUID。
+ * @param signal - 页面切换时取消订阅的信号。
+ * @param onUpdate - 接收最新视图，用替换方式显示正文。
+ * @returns 收到终态后结束。
+ * @throws 网络、协议错误或未收到终态就断流。
+ */
+export async function streamChatRun(id: string, signal: AbortSignal, onUpdate: (run: RunView) => void): Promise<void> {
+  const headers = new Headers({ Accept: 'text/event-stream' });
+  const user = getSessionUser();
+  if (user) headers.set('X-Tidebound-Uid', user.uid);
+  const response = await fetch(`/api/chat/runs/${encodeURIComponent(id)}/events`, { headers, signal, credentials: 'same-origin' });
+  requireSession(response);
+  if (!response.ok || !response.body) throw new Error(`流式连接失败（${response.status}）`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error('流式连接已中断，正在重连');
+      buffer += decoder.decode(value, { stream: true });
+      let boundary: number;
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        const event = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const payload = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+        if (!payload) continue;
+        const run = parseRun(JSON.parse(payload));
+        if (run.run_id !== id) throw new Error('流式执行标识不匹配');
+        onUpdate(run);
+        if (run.status !== 'running') return;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined); // 已断开的订阅无需再次取消。
+    reader.releaseLock();
+  }
+}
+
+
+/**
+ * 清空当前管理员账号的有效上下文，保留审计记录。
+ * @returns 重置后的初始会话视图。
+ * @throws 非管理员、网络或服务端重置失败。
+ */
+export async function resetChatContext(): Promise<SessionView> {
+  return parseSession(await request('/api/chat/context/reset', { method: 'POST' }));
+}
+
+/**
+ * 读取管理员当前账号下一轮使用的预算配置。
+ * @returns 已校验的预算配置。
+ * @throws 网络、权限或响应结构错误。
+ */
+export async function loadContextBudget(): Promise<ContextUsage> {
+  const budget = parseContextUsage(await request('/api/chat/context/budget'));
+  if (!budget) throw new Error('缺少预算配置');
+  return budget;
+}
+
+/**
+ * 保存当前管理员账号的总预算，下一轮对话生效。
+ * @param contextLimit - 包括回复预留和格式余量的总额度。
+ * @returns 服务端确认保存的预算配置。
+ * @throws 网络、权限、预算校验或保存失败。
+ */
+export async function saveContextBudget(contextLimit: number): Promise<ContextUsage> {
+  const budget = parseContextUsage(await request('/api/chat/context/budget', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ context_limit: contextLimit }),
+  }));
+  if (!budget) throw new Error('缺少预算配置');
+  return budget;
+}
+
+/**
+ * 校验情感增强开关与云端可用状态，不接收模型凭据或提示词。
+ * @param data - 服务端返回的未知配置对象。
+ * @returns 仅含开关、配置状态和模型标识的已校验配置。
+ * @throws 配置字段缺失或类型非法。
+ */
+function parseEmotionEnhancement(data: unknown): EmotionEnhancementSettings {
+  if (typeof data !== 'object' || data === null
+    || !('enabled' in data) || typeof data.enabled !== 'boolean'
+    || !('configured' in data) || typeof data.configured !== 'boolean'
+    || !('model' in data) || typeof data.model !== 'string') {
+    throw new Error('情感增强配置格式非法');
+  }
+  return { enabled: data.enabled, configured: data.configured, model: data.model };
+}
+
+/**
+ * 读取当前管理员账号的云端情感增强配置。
+ * @returns 已校验的开关与服务端配置状态。
+ * @throws 网络、权限或响应结构错误。
+ */
+export async function loadEmotionEnhancement(): Promise<EmotionEnhancementSettings> {
+  return parseEmotionEnhancement(await request('/api/chat/emotion-enhancement'));
+}
+
+/**
+ * 保存当前管理员账号的情感增强开关，由下一轮对话使用。
+ * @param enabled - 是否让回复在显示前经过云端角色模型润色。
+ * @returns 服务端确认保存的配置。
+ * @throws 网络、权限、云端未配置或保存失败。
+ */
+export async function saveEmotionEnhancement(enabled: boolean): Promise<EmotionEnhancementSettings> {
+  return parseEmotionEnhancement(await request('/api/chat/emotion-enhancement', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  }));
+}
+
+
+/**
+ * 主动运行当前管理员账号的上下文压缩工作流。
+ * @returns 发布摘要后的预算用量。
+ * @throws 无权限、没有可压历史、工作流失败或网络错误。
+ */
+export async function compactContext(): Promise<ContextUsage> {
+  const usage = parseContextUsage(await request('/api/chat/context/compact', { method: 'POST' }));
+  if (!usage) throw new Error('缺少压缩后的预算用量');
+  return usage;
+}
+
+/**
+ * 登录后预生成欢迎语，显式重试时才重新执行失败任务。
+ * @param retry - 是否由用户明确点击重试。
+ * @returns 当前会话及复用或新建的欢迎任务。
+ * @throws 配置、权限、网络或响应结构错误。
+ */
+export async function prepareMeet(retry = false): Promise<SessionView> {
+  return parseSession(await request(retry ? '/api/chat/meet/retry' : '/api/chat/meet', { method: 'POST' }));
+}
+
+/**
+ * 按服务端配置时区展示消息发生时间。
+ * @param timestamp - 服务端 UTC 时间。
+ * @param timezone - 会话配置的 IANA 时区。
+ * @returns 带日期和时分的本地时间。
+ */
+export function formatMessageTime(timestamp: string, timezone: string): string {
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: timezone, year: 'numeric', month: '2-digit',
+    day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(timestamp));
+}
+
+/**
+ * 主动测试管理员自身的欢迎工作流，跳过登录冷却与已完成欢迎去重。
+ * @returns 当前会话和欢迎执行，生成完成后正常写入历史。
+ * @throws 无权限、非开发环境、正在普通对话或接口失败。
+ */
+export async function testMeetWorkflow(): Promise<SessionView> {
+  return parseSession(await request('/api/chat/meet/test', { method: 'POST' }));
+}
+
+/**
+ * 确认角色正文开始逐字展示，重复确认不改写时间。
+ * @param runId - 正在展示的执行标识。
+ * @param revision - 当前正文版本，工具调用前的旧预览不能覆盖后续正文时间。
+ * @returns 持久化后的执行状态；正文已切换或停止时返回空，不覆盖当前状态。
+ * @throws 网络、权限或保存失败。
+ */
+export async function recordDisplayStart(runId: string, revision: number): Promise<RunView | null> {
+  const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/display`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision }),
+  });
+  requireSession(response);
+  if (response.status === 409) return null;
+  if (!response.ok) throw new Error('展示时间保存失败，请刷新重试。');
+  return parseRun(await response.json());
+}

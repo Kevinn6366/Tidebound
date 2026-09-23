@@ -1,0 +1,156 @@
+"""登录、注册、初始化及 Cookie 会话接口。"""
+
+import hmac
+import os
+from ipaddress import ip_address
+
+from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
+
+from src.tidebound.storage.users import User
+from webapp.auth.dependencies import COOKIE_NAME, current_user
+from webapp.auth.service import SESSION_SECONDS, Credentials
+
+router = APIRouter(prefix="/api/auth")
+
+
+def set_session(request: Request, response: Response, user: User) -> User:
+    """登录成功后轮换 Cookie，身份由响应模型剔除内部字段。
+
+    Args:
+        request: 包含旧 Cookie 的请求。
+        response: 待写入新 Cookie 的响应。
+        user: 已通过验证的账号。
+
+    Returns:
+        当前账号身份。
+    """
+    token = request.app.state.auth.issue_session(user, request.cookies.get(COOKIE_NAME),
+        debug_login=request.url.path == "/api/auth/debug-login")
+    response.set_cookie(COOKIE_NAME, token, httponly=True, samesite="strict",
+                        secure=request.url.scheme == "https", max_age=SESSION_SECONDS)
+    return user
+
+
+@router.get("/status")
+def auth_status(request: Request) -> dict[str, bool]:
+    """报告是否尚需初始化管理员。
+
+    Args:
+        request: 携带账号服务的请求。
+
+    Returns:
+        首次启动状态，不包含账号清单。
+    """
+    return {"setup_required": request.app.state.auth.setup_required,
+            "passwordless_debug": request.app.state.auth.passwordless_debug}
+
+
+@router.post("/setup", response_model=User, status_code=201)
+def setup_admin(credentials: Credentials, request: Request, response: Response) -> User:
+    """允许本机或持有部署初始化口令的请求创建首个管理员。
+
+    Args:
+        credentials: 首个管理员的用户名与密码。
+        request: 当前请求，不信任转发头提供的来源地址。
+        response: 用于设置登录 Cookie。
+
+    Returns:
+        uid-00000001 管理员身份。
+
+    Raises:
+        HTTPException: 非本机且口令不匹配时返回 403。
+        AgentError: 已初始化时返回 409。
+    """
+    host = request.client.host if request.client else ""
+    try:
+        local = ip_address(host).is_loopback
+    except ValueError:
+        local = host == "testclient"
+    expected = os.environ.get('TIDEBOUND_SETUP_TOKEN', '')
+    supplied = request.headers.get('X-Tidebound-Setup-Token', '')
+    if not local and not (expected and hmac.compare_digest(supplied, expected)):
+        raise HTTPException(403, "首次管理员初始化需要部署口令")
+    return set_session(request, response, request.app.state.auth.create_user(credentials, setup=True))
+
+
+@router.post("/register", response_model=User, status_code=201)
+def register(credentials: Credentials, request: Request, response: Response) -> User:
+    """创建普通用户并登录，客户端不能指定 UID 或角色。
+
+    Args:
+        credentials: 新账号用户名与密码。
+        request: 当前请求。
+        response: 用于设置 Cookie 的响应。
+
+    Returns:
+        自动分配 UID 的普通账号。
+    """
+    return set_session(request, response, request.app.state.auth.create_user(credentials))
+
+
+@router.post("/login", response_model=User)
+def login(credentials: Credentials, request: Request, response: Response) -> User:
+    """验证用户名和密码并建立会话。
+
+    Args:
+        credentials: 用户名和密码。
+        request: 当前请求。
+        response: 用于设置 Cookie 的响应。
+
+    Returns:
+        登录账号的 UID、名称与角色。
+    """
+    return set_session(request, response, request.app.state.auth.login(credentials))
+
+
+@router.get("/me", response_model=User)
+def me(request: Request) -> User:
+    """返回当前登录身份。
+
+    Args:
+        request: 带登录会话的请求。
+
+    Returns:
+        当前账号身份。
+    """
+    return current_user(request)
+
+
+@router.post("/logout")
+def logout(request: Request, response: Response) -> dict[str, bool]:
+    """撤销服务端会话并清除 Cookie。
+
+    Args:
+        request: 包含会话的请求。
+        response: 待清理 Cookie 的响应。
+
+    Returns:
+        已完成退出的状态。
+    """
+    request.app.state.auth.logout(request.cookies.get(COOKIE_NAME))
+    response.delete_cookie(COOKIE_NAME)
+    return {"ok": True}
+
+
+class DebugLogin(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    username: str = Field(min_length=2, max_length=64, pattern=r"^\S(?:.*\S)?$")
+
+
+@router.post('/debug-login', response_model=User)
+def debug_login(credentials: DebugLogin, request: Request, response: Response) -> User:
+    """按用户名登录开发账号，开关和账号创建由认证服务控制。
+
+    Args:
+        credentials: 仅包含用户名，不允许指定角色。
+        request: 当前请求及认证服务。
+        response: 写入随机登录 Cookie。
+
+    Returns:
+        已验证的调试身份。
+
+    Raises:
+        AgentError: 调试关闭或管理员未初始化。
+    """
+    return set_session(request, response, request.app.state.auth.debug_login(credentials.username))

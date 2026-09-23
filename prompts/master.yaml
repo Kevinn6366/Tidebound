@@ -1,0 +1,122 @@
+# 整个 prompts 目录是 atri 的提示词集合，替换内容时整体替换此目录。
+# 模型与凭据由服务端配置；此处只管理提示词包。
+prompts:
+  emotion.enhancement:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: emotion.enhancement-zh
+          segments:
+            - content: "@master/emotion.enhancement/emotion.enhancement-zh.md"
+  emotion.enhancement.instruction:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: emotion.enhancement.instruction-zh
+          segments:
+            - content: "@master/emotion.enhancement/instruction-zh.md"
+  world.worldview:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: world.worldview-zh
+          segments:
+            - content: "@master/world.worldview/world.worldview-zh.md"
+  chat.safety:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: chat.safety-zh
+          segments:
+            - content: "@master/chat.safety/chat.safety-zh.md"
+  context.compaction:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: context.compaction-zh
+          segments:
+            - content: "@master/context.compaction/context.compaction-zh.md"
+  context.injection.summary:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: context.injection.summary-zh
+          segments:
+            - content: "@master/context.injection/context.injection.summary-zh.md"
+  chat.character:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: chat.character-zh
+          segments:
+            - content: "@master/chat.character/chat.character-zh.md"
+  tools.injection.timetools:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.injection.timetools-zh
+          segments:
+            - content: "@master/tools.injection/tools.injection.timetools.md"
+  chat.meet:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: chat.meet-zh
+          segments:
+            - content: "@master/chat.meet/chat.meet-zh.md"
+  workflow.followup:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: workflow.followup-zh
+          segments:
+            - content: "@master/workflow.followup/workflow.followup-zh.md"
+  companion.rules:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: companion.rules-zh
+          segments:
+            - content: "@master/companion.rules/companion.rules-zh.md"
+  tools.websearch.reaction:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.reaction-zh
+          segments:
+            - content: "@master/tools.websearch/reaction.md"
+  tools.websearch.context:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.context-zh
+          segments:
+            - content: "@master/tools.websearch/context.md"
+  tools.websearch.impression:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.impression-zh
+          segments:
+            - content: "@master/tools.websearch/impression.md"
+  tools.injection.websearch:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.injection.websearch-zh
+          segments:
+            - content: "@master/tools.websearch/reply.md"
+  tools.websearch.delivery:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: tools.websearch.delivery-zh
+          segments:
+            - content: "@master/tools.websearch/delivery.md"
+  memory.rolling_summary:
+    - language: zh
+      variants:
+        - variant: "-"
+          name: memory.rolling_summary-zh
+          segments:
+            - content: "@master/memory.rolling_summary/summary-zh.md"
